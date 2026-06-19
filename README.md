@@ -113,7 +113,7 @@ pnpm bmo chat
 - [ ] **Phase 2** — 四类 parser + eval harness 调优
 - [ ] **Phase 3** — MCP server + 每周消化报告 + 本地化推理
 
-完整设计文档与路线图见 [`plan.md`](./plan.md)。
+完整设计文档与路线图见 [`docs/plan.md`](./docs/plan.md)。
 
 ---
 
