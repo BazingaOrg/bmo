@@ -1,0 +1,11 @@
+{
+  "name": "bmo",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "verify:db": "pnpm --filter @bmo/core verify:db",
+    "bmo": "pnpm --filter @bmo/cli start"
+  },
+  "engines": { "node": ">=20" }
+}
