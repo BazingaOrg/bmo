@@ -1,14 +1,21 @@
 #!/usr/bin/env node
-import "dotenv/config";
+import "./env.js"; // 必须第一个 import：在 @bmo/core 读 env 之前用 .env 覆盖 shell 变量
 import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { openDb, eat, runAgent } from "@bmo/core";
+import { runDoctor } from "./doctor.js";
 import type Anthropic from "@anthropic-ai/sdk";
 
 const program = new Command();
 program.name("bmo").description("BMO — 个人知识吞噬者 (Phase 0 CLI)").version("0.1.0");
+
+/* ── bmo doctor ────────────────────────────────────────── */
+program
+  .command("doctor")
+  .description("环境自检：投喂前确认 Kimi 对话与本地 embedding 两条链路通不通")
+  .action(runDoctor);
 
 /* ── bmo eat ───────────────────────────────────────────── */
 program
