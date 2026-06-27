@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BMO",
+  "version": "0.1.0",
+  "identifier": "dev.bmo.desktop",
+  "build": {
+    "beforeDevCommand": "corepack pnpm vite:dev",
+    "beforeBuildCommand": "corepack pnpm run prepare:sidecar && corepack pnpm vite:build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "BMO",
+        "width": 1040,
+        "height": 720,
+        "minWidth": 860,
+        "minHeight": 560,
+        "center": true,
+        "visible": true
+      },
+      {
+        "label": "capture",
+        "title": "Feed BMO",
+        "width": 760,
+        "height": 220,
+        "center": true,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "resources": {
+      "resources/sidecar": "sidecar"
+    }
+  }
+}

@@ -1,0 +1,251 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bmo-cream: #fdf6e3;
+  --bmo-canvas: #f8efda;
+  --bmo-sidebar: #efe3c6;
+  --bmo-ink: #173b37;
+  --bmo-muted: #637b76;
+  --bmo-deep: #0f5c55;
+  --bmo-teal: #63c5b5;
+  --bmo-red: #e4504b;
+  --bmo-yellow: #f5c84c;
+  /* 浮层表面：浅色下是半透明白/奶油，深色下必须跟着翻深，否则浅底配翻亮的文字会糊成一片 */
+  --bmo-surface: rgba(255, 255, 255, 0.72);
+  --bmo-surface-strong: rgba(255, 255, 255, 0.82);
+  --bmo-surface-faint: rgba(255, 255, 255, 0.5);
+  --bmo-panel: rgba(248, 239, 218, 0.9);
+  --bmo-capture: rgba(253, 246, 227, 0.97);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  overflow: hidden;
+  background: transparent;
+  color: var(--bmo-ink);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  touch-action: manipulation;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  transition-property: transform, opacity, background-color, color, box-shadow;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--bmo-teal);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .bmo-button {
+    @apply inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-bmo bg-[var(--bmo-deep)] px-4 text-sm font-semibold text-[var(--bmo-cream)] shadow-soft;
+  }
+
+  .bmo-button-secondary {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-bmo bg-[var(--bmo-cream)] px-4 text-sm font-semibold text-[var(--bmo-deep)] shadow-soft;
+  }
+
+  .icon-button {
+    @apply grid h-10 w-10 shrink-0 place-items-center rounded-bmo text-[var(--bmo-muted)] hover:bg-[rgba(15,92,85,0.08)];
+  }
+
+  .nav-item {
+    @apply flex h-10 w-full items-center gap-3 rounded-bmo px-3 text-left text-sm font-medium text-[var(--bmo-muted)];
+  }
+
+  .nav-item:not(:disabled):hover {
+    @apply bg-[rgba(15,92,85,0.07)] text-[var(--bmo-ink)];
+  }
+
+  .nav-item-active {
+    @apply bg-[var(--bmo-cream)] text-[var(--bmo-deep)] shadow-soft;
+  }
+
+  .legend {
+    @apply flex items-center gap-3 rounded-bmo bg-[var(--bmo-surface-faint)] px-3 py-2 text-xs text-[var(--bmo-muted)] shadow-soft;
+  }
+
+  .legend span {
+    @apply flex items-center gap-1.5;
+  }
+
+  .legend i {
+    @apply h-2.5 w-2.5 rounded-full shadow-[inset_0_0_0_1px_rgba(15,92,85,0.18)];
+  }
+
+  .empty-state {
+    @apply mx-auto mt-28 flex max-w-sm flex-col items-center text-center;
+  }
+
+  .empty-state h2 {
+    @apply mt-5 text-[24px] font-semibold leading-tight;
+    text-wrap: balance;
+  }
+
+  .empty-state p {
+    @apply mt-2 text-sm leading-6 text-[var(--bmo-muted)];
+    text-wrap: pretty;
+  }
+
+  .message-row {
+    @apply flex gap-3;
+  }
+
+  .message-row.user {
+    @apply justify-end;
+  }
+
+  .message-row.assistant {
+    @apply justify-start;
+  }
+
+  .assistant-avatar {
+    @apply mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-bmo bg-[var(--bmo-deep)] text-[var(--bmo-cream)] shadow-soft;
+  }
+
+  .message-bubble {
+    @apply max-w-[78%] rounded-bmo-lg px-4 py-3 shadow-soft;
+  }
+
+  .message-row.user .message-bubble {
+    @apply bg-[var(--bmo-deep)] text-[var(--bmo-cream)];
+  }
+
+  .message-row.assistant .message-bubble {
+    @apply bg-[var(--bmo-surface)] text-[var(--bmo-ink)];
+  }
+
+  .tool-line {
+    @apply mb-3 flex items-center gap-2 rounded-bmo bg-[rgba(99,197,181,0.16)] px-3 py-2 text-xs text-[var(--bmo-deep)];
+  }
+
+  .source-badge {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium;
+  }
+
+  .source-chip {
+    @apply inline-flex h-7 items-center gap-1 rounded-full bg-[rgba(15,92,85,0.08)] px-2.5 text-xs text-[var(--bmo-deep)] hover:bg-[rgba(15,92,85,0.13)];
+  }
+
+  .source-chip span {
+    @apply font-mono text-[10px] text-[var(--bmo-muted)];
+  }
+
+  .composer {
+    @apply flex shrink-0 items-center gap-3 border-t border-[rgba(15,92,85,0.12)] bg-[var(--bmo-panel)] px-6 py-4;
+  }
+
+  .composer-input {
+    @apply h-11 min-w-0 flex-1 rounded-bmo bg-[var(--bmo-surface-strong)] px-4 text-[15px] text-[var(--bmo-ink)] shadow-soft placeholder:text-[var(--bmo-muted)];
+  }
+
+  .capture-shell {
+    @apply w-full max-w-2xl rounded-[20px] bg-[var(--bmo-capture)] p-4 text-[var(--bmo-ink)] shadow-lift;
+  }
+
+  .capture-input {
+    @apply min-h-[56px] flex-1 resize-none border-0 bg-transparent px-1 py-2 text-[20px] font-semibold leading-7 text-[var(--bmo-ink)] placeholder:text-[rgba(23,59,55,0.38)];
+  }
+
+  .capture-tool {
+    @apply inline-flex h-9 items-center justify-center gap-1.5 rounded-bmo bg-[rgba(15,92,85,0.07)] px-3 text-sm font-medium text-[var(--bmo-deep)] hover:bg-[rgba(15,92,85,0.12)];
+  }
+
+  .source-panel {
+    @apply fixed inset-0 z-50;
+  }
+
+  .source-panel-backdrop {
+    @apply absolute inset-0 h-full w-full bg-[rgba(15,92,85,0.18)];
+  }
+
+  .source-panel-card {
+    @apply absolute right-5 top-5 h-[calc(100vh-40px)] w-[420px] overflow-y-auto rounded-bmo-lg bg-[var(--bmo-cream)] p-5 text-[var(--bmo-ink)] shadow-lift;
+  }
+
+  .prose-bmo {
+    @apply text-[15px] leading-7;
+    text-wrap: pretty;
+  }
+
+  .prose-bmo p {
+    @apply my-0;
+  }
+
+  .prose-bmo p + p {
+    @apply mt-3;
+  }
+
+  .prose-bmo code {
+    @apply rounded bg-[rgba(15,92,85,0.08)] px-1.5 py-0.5 font-mono text-[13px];
+  }
+
+  .prose-bmo pre {
+    @apply my-3 overflow-x-auto rounded-bmo bg-[rgba(15,92,85,0.08)] p-3;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bmo-cream: #102522;
+    --bmo-canvas: #081714;
+    --bmo-sidebar: #0d211e;
+    --bmo-ink: #e5f4ef;
+    --bmo-muted: #91aaa4;
+    --bmo-deep: #63c5b5;
+    /* 表面翻深，配合翻亮的 --bmo-ink 文字才有对比 */
+    --bmo-surface: rgba(255, 255, 255, 0.07);
+    --bmo-surface-strong: rgba(255, 255, 255, 0.1);
+    --bmo-surface-faint: rgba(255, 255, 255, 0.05);
+    --bmo-panel: rgba(13, 33, 30, 0.92);
+    --bmo-capture: rgba(16, 37, 34, 0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}

@@ -101,7 +101,7 @@ curl -N -X POST localhost:<port>/chat -d '{"messages":[{"role":"user","content":
 - 装 Tauri 插件:`global-shortcut`、`clipboard-manager`、`shell`、`notification`、`autostart`,以及 tray 能力。
 
 ### B2. sidecar 生命周期(Rust 侧少量代码)
-- **打包 sidecar**:用 `bun build --compile` 或 `pkg` 把 `packages/server` 打成单二进制,作为 Tauri `externalBin` 随包分发(开发期可直接 spawn `node`)。
+- **打包 sidecar**:开发期直接 spawn `pnpm --filter @bmo/server dev`;分发期不强压单二进制,而是把 Node runtime + `packages/server` production deploy 结果打进 Tauri resources,由 Rust 从 resources 启动 `node server/dist/index.js --port=0`。`bun build --compile` / `pkg` 单二进制只作为后续优化,不阻塞 Phase 1。
 - **启动**:App 启动时 spawn sidecar,**读它 stdout 的端口号**,存进 Tauri state,暴露给前端(`/health` 轮询直到 ready)。
 - **健康检查**:前端启动时轮询 `/health`,未就绪显示"BMO 启动中"。
 - **退出清理**:监听 Tauri 退出 / window 销毁事件,`kill` sidecar 子进程,确保无僵尸。
@@ -195,7 +195,7 @@ curl -N -X POST localhost:<port>/chat -d '{"messages":[{"role":"user","content":
 
 | 风险 | 对策 |
 |---|---|
-| sidecar 打包(依赖 node 运行时) | 开发期直接 spawn `node`;分发期 `bun build --compile` 单二进制 externalBin |
+| sidecar 打包(依赖 node 运行时) | 开发期直接 spawn `pnpm`;分发期嵌入 Node runtime + server resources。单二进制会被 `better-sqlite3` / `sqlite-vec` 原生依赖卡住,暂不作为 Phase 1 路线 |
 | Tauri Rust 编译耗时/环境坑 | 先装好 rustup + Xcode CLT;首次编译慢属正常 |
 | 流式下 tool_calls 累积易错 | Milestone A 用 curl 充分测;`index` 对齐 + `arguments` 拼接写单测 |
 | sidecar 端口冲突 | 监听 `:0` 随机端口,壳读 stdout 拿实际端口 |
