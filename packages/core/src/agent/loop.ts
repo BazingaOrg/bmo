@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { type DB } from "../db/index.js";
-import { searchKnowledge } from "../search/hybrid.js";
+import { searchKnowledge, type SearchHit } from "../search/hybrid.js";
 
 const MODEL = process.env.BMO_CHAT_MODEL ?? "kimi-k2.6";
 const MAX_ITERATIONS = 8;
@@ -35,6 +35,8 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+type MaybePromise<T> = T | Promise<T>;
+
 /** 执行工具：把检索结果格式化为带来源元数据的文本，供模型生成引用 */
 async function executeTool(
   db: DB,
@@ -45,7 +47,8 @@ async function executeTool(
   if (name !== "search_knowledge") return `未知工具: ${name}`;
   const hits = await searchKnowledge(db, String(input.query ?? ""), Number(input.top_k ?? 5));
   // provenance 的事实来源：客观告诉调用方这次查库命中了几条（不依赖模型自报）
-  events.onSearchResult?.(hits.length);
+  await events.onSearchResult?.(hits.length);
+  await events.onSearchHits?.(hits);
   if (hits.length === 0) return "未找到相关内容。";
   return hits
     .map(
@@ -57,13 +60,54 @@ async function executeTool(
 }
 
 export interface AgentEvents {
-  onText?: (text: string) => void;
-  onToolUse?: (name: string, input: unknown) => void;
+  onText?: (text: string) => MaybePromise<void>;
+  onTextDelta?: (delta: string) => MaybePromise<void>;
+  onToolUse?: (name: string, input: unknown) => MaybePromise<void>;
   /** 每次查库后回调命中条数：0 = 查了但库里没有；>0 = 查到了。用于生成 provenance 标记 */
-  onSearchResult?: (hits: number) => void;
+  onSearchResult?: (hits: number) => MaybePromise<void>;
+  /** 每次查库命中的完整来源，用于 UI 展开来源卡片 */
+  onSearchHits?: (hits: SearchHit[]) => MaybePromise<void>;
 }
 
 export type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+type ToolCallAccumulator = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
+function appendToolCallDelta(
+  toolCalls: ToolCallAccumulator[],
+  delta: OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta.ToolCall
+): void {
+  const index = delta.index;
+  const existing =
+    toolCalls[index] ??
+    ({
+      id: "",
+      type: "function",
+      function: { name: "", arguments: "" },
+    } satisfies ToolCallAccumulator);
+
+  if (delta.id) existing.id = delta.id;
+  if (delta.type === "function") existing.type = "function";
+  if (delta.function?.name) existing.function.name += delta.function.name;
+  if (delta.function?.arguments) existing.function.arguments += delta.function.arguments;
+
+  toolCalls[index] = existing;
+}
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  try {
+    return JSON.parse(raw || "{}") as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
 
 /**
  * 手写 agent loop（Phase 0 非流式，逻辑最清晰；流式留给 Phase 1 的 SSE）。
@@ -97,7 +141,7 @@ export async function runAgent(
     const msg = res.choices[0]?.message;
     if (!msg) return messages;
 
-    if (msg.content) events.onText?.(msg.content);
+    if (msg.content) await events.onText?.(msg.content);
 
     // 回填 assistant 消息（可能带 tool_calls，此时 content 可能为 null）
     const assistant: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
@@ -119,12 +163,82 @@ export async function runAgent(
       } catch {
         /* 参数 JSON 损坏时按空参数处理 */
       }
-      events.onToolUse?.(tc.function.name, args);
+      await events.onToolUse?.(tc.function.name, args);
       const result = await executeTool(db, tc.function.name, args, events);
       messages.push({ role: "tool", tool_call_id: tc.id, content: result });
     }
   }
 
-  events.onText?.("（达到最大迭代次数，先停在这里）");
+  await events.onText?.("（达到最大迭代次数，先停在这里）");
+  return messages;
+}
+
+/**
+ * Phase 1 流式 agent loop。
+ *
+ * Kimi/OpenAI 兼容流式工具调用会把 tool_calls 拆在多个 chunk 中返回，
+ * 因此必须按 index 累积 id/name/arguments，收齐本轮 assistant 消息后再执行工具。
+ */
+export async function runAgentStream(
+  db: DB,
+  messages: ChatMessage[],
+  events: AgentEvents = {}
+): Promise<ChatMessage[]> {
+  const client = new OpenAI({
+    baseURL: process.env.BMO_CHAT_BASE_URL,
+    apiKey: process.env.BMO_CHAT_API_KEY,
+  });
+
+  for (let i = 0; i < MAX_ITERATIONS; i++) {
+    const stream = await client.chat.completions.create({
+      model: MODEL,
+      max_tokens: 2048,
+      temperature: TEMPERATURE,
+      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
+      tools: TOOLS,
+      stream: true,
+    });
+
+    let content = "";
+    const toolCalls: ToolCallAccumulator[] = [];
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+      if (!delta) continue;
+
+      if (delta.content) {
+        content += delta.content;
+        await events.onTextDelta?.(delta.content);
+      }
+
+      for (const toolCallDelta of delta.tool_calls ?? []) {
+        appendToolCallDelta(toolCalls, toolCallDelta);
+      }
+    }
+
+    const validToolCalls = toolCalls.filter((tc) => tc.id && tc.function.name);
+    const assistant: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
+      role: "assistant",
+      content: content || null,
+    };
+    if (validToolCalls.length > 0) assistant.tool_calls = validToolCalls;
+
+    messages.push(assistant);
+    if (validToolCalls.length === 0) {
+      if (content) await events.onText?.(content);
+      return messages;
+    }
+
+    for (const tc of validToolCalls) {
+      const args = parseToolArguments(tc.function.arguments);
+      await events.onToolUse?.(tc.function.name, args);
+      const result = await executeTool(db, tc.function.name, args, events);
+      messages.push({ role: "tool", tool_call_id: tc.id, content: result });
+    }
+  }
+
+  const stopText = "（达到最大迭代次数，先停在这里）";
+  await events.onTextDelta?.(stopText);
+  await events.onText?.(stopText);
   return messages;
 }
