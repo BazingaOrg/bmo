@@ -3,10 +3,10 @@
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "build": "pnpm -r build",
-    "typecheck": "pnpm --filter @bmo/core build && pnpm -r typecheck",
-    "verify:db": "pnpm --filter @bmo/core verify:db",
-    "bmo": "pnpm --filter @bmo/cli start"
+    "build": "corepack pnpm -r build",
+    "typecheck": "corepack pnpm --filter @bmo/core build && corepack pnpm -r typecheck",
+    "verify:db": "corepack pnpm --filter @bmo/core verify:db",
+    "bmo": "corepack pnpm --filter @bmo/cli start"
   },
   "engines": { "node": ">=20" },
   "devDependencies": {
