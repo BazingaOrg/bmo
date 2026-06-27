@@ -62,16 +62,27 @@ program
     console.log("BMO 上线。输入 exit 退出。\n");
 
     for (;;) {
-      const line = (await rl.question("你 > ")).trim();
+      let line: string;
+      try {
+        line = (await rl.question("你 > ")).trim();
+      } catch {
+        break; // stdin 关闭(EOF / Ctrl-D / 管道结束):优雅退出,不抛 ERR_USE_AFTER_CLOSE
+      }
       if (!line) continue;
       if (line === "exit" || line === "quit") break;
 
       messages.push({ role: "user", content: line });
-      await runAgent(db, messages, {
-        onToolUse: (_name, input) =>
-          console.log(`  ⚙ 翻找记忆：${JSON.stringify((input as { query?: string }).query)}`),
-        onText: (text) => console.log(`BMO > ${text}\n`),
-      });
+      try {
+        await runAgent(db, messages, {
+          onToolUse: (_name, input) =>
+            console.log(`  ⚙ 翻找记忆：${JSON.stringify((input as { query?: string }).query)}`),
+          onText: (text) => console.log(`BMO > ${text}\n`),
+        });
+      } catch (e) {
+        // 单次调用失败不该崩掉整个会话：丢掉这条未答的输入，保持消息序列干净，继续聊
+        messages.pop();
+        console.log(`BMO > 唔，刚才出了点岔子：${(e as Error).message}\n`);
+      }
     }
     rl.close();
   });
