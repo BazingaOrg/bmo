@@ -4,9 +4,8 @@ import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { openDb, eat, runAgent } from "@bmo/core";
+import { openDb, eat, runAgent, type ChatMessage } from "@bmo/core";
 import { runDoctor } from "./doctor.js";
-import type Anthropic from "@anthropic-ai/sdk";
 
 const program = new Command();
 program.name("bmo").description("BMO — 个人知识吞噬者 (Phase 0 CLI)").version("0.1.0");
@@ -59,7 +58,7 @@ program
   .action(async () => {
     const db = openDb();
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const messages: Anthropic.MessageParam[] = [];
+    const messages: ChatMessage[] = [];
     console.log("BMO 上线。输入 exit 退出。\n");
 
     for (;;) {

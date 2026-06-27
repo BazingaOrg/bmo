@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { openDb, defaultDbPath, embed, EMBEDDING_MODEL, EMBEDDING_DIM } from "@bmo/core";
 
 const ok = (m: string) => console.log(`  \x1b[32m✓\x1b[0m ${m}`);
@@ -38,25 +38,28 @@ export async function runDoctor(): Promise<void> {
     fatal = true;
   }
 
-  /* ── 2. Chat / Agent：Kimi(Anthropic 兼容端点) ───────────── */
+  /* ── 2. Chat / Agent：Kimi(官方 OpenAI 兼容端点) ───────────── */
   console.log("\n【Chat】Kimi 对话链路");
-  const chatBase = process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
+  const chatBase = process.env.BMO_CHAT_BASE_URL ?? "(未设)";
   const chatModel = process.env.BMO_CHAT_MODEL ?? "";
   console.log(`  端点 ${chatBase} · 模型 ${chatModel || "(未设)"}`);
-  if (!process.env.ANTHROPIC_API_KEY) {
-    warn("未填 ANTHROPIC_API_KEY，跳过对话自检——填入 Kimi key 后重跑 bmo doctor");
+  if (!process.env.BMO_CHAT_API_KEY) {
+    warn("未填 BMO_CHAT_API_KEY，跳过对话自检——填入 Kimi key 后重跑 bmo doctor");
   } else if (!chatModel) {
     warn("未设 BMO_CHAT_MODEL，跳过——填入 Kimi 的 model id 后重跑");
   } else {
     try {
-      const client = new Anthropic(); // 自动读 ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY
-      const res = await client.messages.create({
+      const client = new OpenAI({
+        baseURL: process.env.BMO_CHAT_BASE_URL,
+        apiKey: process.env.BMO_CHAT_API_KEY,
+      });
+      const res = await client.chat.completions.create({
         model: chatModel,
         max_tokens: 16,
         messages: [{ role: "user", content: "只回复两个字：在吗" }],
       });
-      const text = res.content.find((b) => b.type === "text");
-      ok(`Kimi 通了，模型 ${res.model} 回复：${text && "text" in text ? text.text.trim() : "(无文本)"}`);
+      const text = res.choices[0]?.message?.content;
+      ok(`Kimi 通了，模型 ${res.model} 回复：${text?.trim() || "(无文本)"}`);
     } catch (e) {
       bad(`调用失败：${(e as Error).message}`);
       warn("常见原因：model id 不对 / key 无效 / 端点地址不对。核对 Moonshot 控制台的可用 model id");

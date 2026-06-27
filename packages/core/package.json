@@ -4,17 +4,19 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:db": "tsx src/verify-db.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "better-sqlite3": "^11.9.0",
-    "sqlite-vec": "^0.1.6",
-    "nanoid": "^5.0.9"
+    "nanoid": "^5.0.9",
+    "openai": "^6.45.0",
+    "sqlite-vec": "^0.1.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
