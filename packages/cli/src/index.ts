@@ -73,11 +73,21 @@ program
 
       messages.push({ role: "user", content: line });
       try {
+        let totalHits = 0;
+        let searched = false;
         await runAgent(db, messages, {
           onToolUse: (_name, input) =>
             console.log(`  ⚙ 翻找记忆：${JSON.stringify((input as { query?: string }).query)}`),
+          onSearchResult: (hits) => {
+            searched = true;
+            totalHits += hits;
+          },
           onText: (text) => console.log(`BMO > ${text}\n`),
         });
+        // provenance 图例：基于"是否查库、命中几条"这一事实，而非模型自报
+        if (!searched) console.log("  💭 来源：BMO 的通用知识(本轮未查库)\n");
+        else if (totalHits > 0) console.log(`  📚 来源：你的库(参考 ${totalHits} 条记忆，见上方【来源】)\n`);
+        else console.log("  🔍 查了你的库，但没找到相关记忆 → 以上为通用知识\n");
       } catch (e) {
         // 单次调用失败不该崩掉整个会话：丢掉这条未答的输入，保持消息序列干净，继续聊
         messages.pop();

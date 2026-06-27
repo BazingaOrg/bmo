@@ -36,9 +36,16 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 ];
 
 /** 执行工具：把检索结果格式化为带来源元数据的文本，供模型生成引用 */
-async function executeTool(db: DB, name: string, input: Record<string, unknown>): Promise<string> {
+async function executeTool(
+  db: DB,
+  name: string,
+  input: Record<string, unknown>,
+  events: AgentEvents
+): Promise<string> {
   if (name !== "search_knowledge") return `未知工具: ${name}`;
   const hits = await searchKnowledge(db, String(input.query ?? ""), Number(input.top_k ?? 5));
+  // provenance 的事实来源：客观告诉调用方这次查库命中了几条（不依赖模型自报）
+  events.onSearchResult?.(hits.length);
   if (hits.length === 0) return "未找到相关内容。";
   return hits
     .map(
@@ -52,6 +59,8 @@ async function executeTool(db: DB, name: string, input: Record<string, unknown>)
 export interface AgentEvents {
   onText?: (text: string) => void;
   onToolUse?: (name: string, input: unknown) => void;
+  /** 每次查库后回调命中条数：0 = 查了但库里没有；>0 = 查到了。用于生成 provenance 标记 */
+  onSearchResult?: (hits: number) => void;
 }
 
 export type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -111,7 +120,7 @@ export async function runAgent(
         /* 参数 JSON 损坏时按空参数处理 */
       }
       events.onToolUse?.(tc.function.name, args);
-      const result = await executeTool(db, tc.function.name, args);
+      const result = await executeTool(db, tc.function.name, args, events);
       messages.push({ role: "tool", tool_call_id: tc.id, content: result });
     }
   }
