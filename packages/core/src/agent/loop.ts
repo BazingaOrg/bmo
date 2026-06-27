@@ -4,6 +4,9 @@ import { searchKnowledge } from "../search/hybrid.js";
 
 const MODEL = process.env.BMO_CHAT_MODEL ?? "kimi-k2.6";
 const MAX_ITERATIONS = 8;
+// BMO 是工具判断 + 忠实引用的任务，要确定性而非创造性，所以默认低温。
+// 注意：Moonshot 的 temperature 取值范围是 [0, 1]（与 OpenAI 的 [0, 2] 不同），别设 >1。
+const TEMPERATURE = Number(process.env.BMO_CHAT_TEMPERATURE ?? 0.3);
 
 const SYSTEM_PROMPT = `你是 BMO，一台可爱的个人知识库小机器人。用户会把日常浏览的内容投喂给你，你负责记住它们。
 
@@ -77,6 +80,7 @@ export async function runAgent(
     const res = await client.chat.completions.create({
       model: MODEL,
       max_tokens: 2048,
+      temperature: TEMPERATURE,
       messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
       tools: TOOLS,
     });
