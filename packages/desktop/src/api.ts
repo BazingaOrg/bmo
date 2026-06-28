@@ -25,10 +25,18 @@ export type SearchHit = {
   score: number;
 };
 
+export type WebSource = {
+  title: string;
+  url: string;
+  snippet?: string;
+};
+
 export type ProvenancePayload = {
   searched: boolean;
   totalHits: number;
   hits: SearchHit[];
+  webSearched?: boolean;
+  webSources?: WebSource[];
 };
 
 export type DocumentDetail = {
@@ -50,6 +58,29 @@ export type RuntimeSettings = {
   chunkMaxChars: number;
   chunkOverlap: number;
   envPath: string;
+};
+
+export type DigestStats = {
+  documentCount: number;
+  chunkCount: number;
+  sourceTypes: Record<string, number>;
+  topSources: { title: string; count: number }[];
+  clusters: { title: string; chunkCount: number; summary: string; sources: string[] }[];
+};
+
+export type Digest = {
+  id: string;
+  periodStart: number;
+  periodEnd: number;
+  markdown: string;
+  stats: DigestStats;
+  createdAt: number;
+};
+
+export type DigestPayload = {
+  latest: Digest | null;
+  digests: Digest[];
+  stats: { documentCount: number; chunkCount: number; topSources: { title: string; count: number }[] };
 };
 
 export type SettingsPatch = {
@@ -159,6 +190,23 @@ export async function updateSettings(patch: SettingsPatch): Promise<RuntimeSetti
   });
   const body = await readJsonResponse<{ settings: RuntimeSettings }>(res);
   return body.settings;
+}
+
+export async function getDigests(): Promise<DigestPayload> {
+  const server = await getServerCredentials();
+  const res = await fetch(`${server.url}/digests`, {
+    headers: authHeaders(server),
+  });
+  return readJsonResponse<DigestPayload>(res);
+}
+
+export async function generateDigest(): Promise<DigestPayload> {
+  const server = await getServerCredentials();
+  const res = await fetch(`${server.url}/digests/generate`, {
+    method: "POST",
+    headers: authHeaders(server),
+  });
+  return readJsonResponse<DigestPayload>(res);
 }
 
 export async function streamChat(messages: ChatMessage[], handlers: ChatStreamHandlers): Promise<void> {

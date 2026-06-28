@@ -45,7 +45,10 @@ export const useChatStore = defineStore("chat", () => {
         },
         onTool(payload) {
           const input = payload.input as { query?: unknown };
-          assistant.toolQuery = typeof input.query === "string" ? input.query : JSON.stringify(payload.input);
+          const name = payload.name === "$web_search" ? "web_search" : payload.name;
+          assistant.toolQuery = `${name}: ${
+            typeof input.query === "string" ? input.query : JSON.stringify(payload.input)
+          }`;
         },
         onProvenance(payload) {
           assistant.provenance = payload;

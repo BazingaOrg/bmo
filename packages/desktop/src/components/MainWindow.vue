@@ -5,14 +5,18 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import {
   getDesktopStatus,
+  generateDigest,
   getDocument,
+  getDigests,
   getServerUrl,
   getSettings,
   showCaptureWindow,
   updateSettings,
   type DocumentDetail,
+  type DigestPayload,
   type RuntimeSettings,
   type SearchHit,
+  type WebSource,
 } from "../api";
 import { useChatStore, type UiMessage } from "../stores/chat";
 
@@ -29,6 +33,10 @@ const settingsOpen = ref(false);
 const settingsBusy = ref(false);
 const settingsFeedback = ref<string | null>(null);
 const settingsDraft = ref<RuntimeSettings | null>(null);
+const activeTab = ref<"chat" | "growth">("chat");
+const digestPayload = ref<DigestPayload | null>(null);
+const digestBusy = ref(false);
+const digestError = ref<string | null>(null);
 const scrollArea = ref<HTMLElement | null>(null);
 
 const subtitle = computed(() => (ready.value ? "sidecar ready" : "BMO 启动中"));
@@ -43,6 +51,7 @@ onMounted(async () => {
   try {
     await getServerUrl();
     ready.value = true;
+    await loadDigests();
   } catch (error) {
     startupError.value = error instanceof Error ? error.message : String(error);
   }
@@ -70,6 +79,8 @@ function renderMarkdown(content: string): string {
 function badge(message: UiMessage): { label: string; tone: string; icon: typeof Brain } {
   const provenance = message.provenance;
   if (!provenance) return { label: "生成中", tone: "bg-[#F5C84C]/25 text-[#6A4B00]", icon: Loader2 };
+  if (provenance.webSearched && provenance.totalHits > 0) return { label: `📚+🌐 库内 ${provenance.totalHits} · 联网`, tone: "bg-[#63C5B5]/25 text-[#0F5C55]", icon: Brain };
+  if (provenance.webSearched) return { label: "🌐 联网", tone: "bg-[#63C5B5]/20 text-[#0F5C55]", icon: Search };
   if (!provenance.searched) return { label: "💭 通用知识", tone: "bg-[var(--bmo-surface)] text-[var(--bmo-muted)]", icon: Brain };
   if (provenance.totalHits === 0) return { label: "🔍 查了没命中", tone: "bg-[#F5C84C]/25 text-[#6A4B00]", icon: Search };
   return { label: `📚 基于你的库 · ${provenance.totalHits} 条`, tone: "bg-[#63C5B5]/25 text-[#0F5C55]", icon: Brain };
@@ -79,6 +90,10 @@ function sourceHits(message: UiMessage): SearchHit[] {
   const hits = message.provenance?.hits ?? [];
   const referenced = hits.filter((hit) => message.content.includes(`【来源：${hit.documentTitle}】`));
   return referenced.length > 0 ? referenced : hits;
+}
+
+function webSources(message: UiMessage): WebSource[] {
+  return message.provenance?.webSources ?? [];
 }
 
 const sourceHighlightParts = computed(() => {
@@ -133,6 +148,35 @@ async function saveSettings(): Promise<void> {
   }
 }
 
+async function loadDigests(): Promise<void> {
+  digestBusy.value = true;
+  digestError.value = null;
+  try {
+    digestPayload.value = await getDigests();
+  } catch (error) {
+    digestError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    digestBusy.value = false;
+  }
+}
+
+async function refreshDigest(): Promise<void> {
+  digestBusy.value = true;
+  digestError.value = null;
+  try {
+    digestPayload.value = await generateDigest();
+  } catch (error) {
+    digestError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    digestBusy.value = false;
+  }
+}
+
+function selectDigest(id: string): void {
+  const digest = digestPayload.value?.digests.find((item) => item.id === id);
+  if (digest && digestPayload.value) digestPayload.value.latest = digest;
+}
+
 function splitForHighlight(markdown: string, chunk: string): { text: string; highlighted: boolean }[] {
   const exact = markdown.indexOf(chunk);
   if (exact >= 0) return splitAt(markdown, exact, chunk.length);
@@ -176,7 +220,7 @@ function splitAt(text: string, start: number, length: number): { text: string; h
           </div>
 
           <nav class="mt-8 space-y-1">
-            <button class="nav-item nav-item-active" type="button">
+            <button :class="['nav-item', activeTab === 'chat' && 'nav-item-active']" type="button" @click="activeTab = 'chat'">
               <MessageCircle :size="17" />
               对话
             </button>
@@ -184,7 +228,7 @@ function splitAt(text: string, start: number, length: number): { text: string; h
               <Sparkles :size="17" />
               食谱
             </button>
-            <button class="nav-item" type="button" disabled>
+            <button :class="['nav-item', activeTab === 'growth' && 'nav-item-active']" type="button" @click="activeTab = 'growth'; loadDigests()">
               <Brain :size="17" />
               成长
             </button>
@@ -197,7 +241,7 @@ function splitAt(text: string, start: number, length: number): { text: string; h
         </button>
       </aside>
 
-      <section class="flex min-w-0 flex-col">
+      <section v-if="activeTab === 'chat'" class="flex min-w-0 flex-col">
         <header class="flex h-16 shrink-0 items-center justify-between border-b border-[rgba(15,92,85,0.12)] px-6">
           <div>
             <h1 class="text-[20px] font-semibold leading-none">和记忆聊天</h1>
@@ -254,6 +298,17 @@ function splitAt(text: string, start: number, length: number): { text: string; h
                     <span v-if="hit.similarity != null">{{ hit.similarity.toFixed(2) }}</span>
                     <ChevronRight :size="13" />
                   </button>
+                  <a
+                    v-for="source in webSources(message)"
+                    :key="source.url"
+                    class="source-chip"
+                    :href="source.url"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    🌐 {{ source.title }}
+                    <ChevronRight :size="13" />
+                  </a>
                 </div>
               </div>
             </article>
@@ -272,6 +327,74 @@ function splitAt(text: string, start: number, length: number): { text: string; h
             <Send :size="17" />
           </button>
         </form>
+      </section>
+
+      <section v-else class="flex min-w-0 flex-col">
+        <header class="flex h-16 shrink-0 items-center justify-between border-b border-[rgba(15,92,85,0.12)] px-6">
+          <div>
+            <h1 class="text-[20px] font-semibold leading-none">成长</h1>
+            <p class="mt-1 text-sm text-[var(--bmo-muted)]">本周消化报告和知识库体检。</p>
+          </div>
+          <button class="bmo-button" type="button" :disabled="digestBusy" @click="refreshDigest">
+            <Loader2 v-if="digestBusy" :size="15" class="animate-spin" />
+            <Sparkles v-else :size="15" />
+            生成周报
+          </button>
+        </header>
+
+        <div class="flex-1 overflow-y-auto px-6 py-6">
+          <div v-if="digestError" class="mx-auto mb-4 max-w-4xl rounded-bmo bg-[rgba(228,80,75,0.12)] px-4 py-3 text-sm text-[var(--bmo-red)] shadow-soft">
+            {{ digestError }}
+          </div>
+          <div class="mx-auto grid max-w-5xl gap-5">
+            <div class="grid grid-cols-3 gap-4">
+              <div class="rounded-bmo bg-[var(--bmo-surface)] p-4 shadow-soft">
+                <p class="text-xs text-[var(--bmo-muted)]">文档</p>
+                <p class="mt-2 text-2xl font-semibold">{{ digestPayload?.stats.documentCount ?? 0 }}</p>
+              </div>
+              <div class="rounded-bmo bg-[var(--bmo-surface)] p-4 shadow-soft">
+                <p class="text-xs text-[var(--bmo-muted)]">知识块</p>
+                <p class="mt-2 text-2xl font-semibold">{{ digestPayload?.stats.chunkCount ?? 0 }}</p>
+              </div>
+              <div class="rounded-bmo bg-[var(--bmo-surface)] p-4 shadow-soft">
+                <p class="text-xs text-[var(--bmo-muted)]">周报</p>
+                <p class="mt-2 text-2xl font-semibold">{{ digestPayload?.digests.length ?? 0 }}</p>
+              </div>
+            </div>
+
+            <article class="rounded-bmo bg-[var(--bmo-surface)] p-5 shadow-soft">
+              <div class="flex items-center justify-between gap-3">
+                <h2 class="text-lg font-semibold">最新周报</h2>
+                <span v-if="digestPayload?.latest" class="font-mono text-xs text-[var(--bmo-muted)]">
+                  {{ new Date(digestPayload.latest.periodStart).toLocaleDateString() }} - {{ new Date(digestPayload.latest.periodEnd).toLocaleDateString() }}
+                </span>
+              </div>
+              <div v-if="digestBusy && !digestPayload" class="mt-5 flex items-center gap-2 text-sm text-[var(--bmo-muted)]">
+                <Loader2 :size="15" class="animate-spin" />
+                读取中...
+              </div>
+              <div v-else-if="digestPayload?.latest" class="prose-bmo mt-4" v-html="renderMarkdown(digestPayload.latest.markdown)" />
+              <p v-else class="mt-4 text-sm text-[var(--bmo-muted)]">还没有周报。</p>
+            </article>
+
+            <article class="rounded-bmo bg-[var(--bmo-surface)] p-5 shadow-soft">
+              <h2 class="text-lg font-semibold">历史周报</h2>
+              <div class="mt-4 grid gap-2">
+                <button
+                  v-for="digest in digestPayload?.digests ?? []"
+                  :key="digest.id"
+                  class="flex items-center justify-between rounded-bmo bg-[rgba(15,92,85,0.06)] px-3 py-2 text-left text-sm"
+                  type="button"
+                  @click="selectDigest(digest.id)"
+                >
+                  <span>{{ new Date(digest.periodStart).toLocaleDateString() }} - {{ new Date(digest.periodEnd).toLocaleDateString() }}</span>
+                  <span class="text-[var(--bmo-muted)]">{{ digest.stats.chunkCount }} 块</span>
+                </button>
+                <p v-if="!digestPayload?.digests.length" class="text-sm text-[var(--bmo-muted)]">暂无历史周报。</p>
+              </div>
+            </article>
+          </div>
+        </div>
       </section>
     </div>
 
