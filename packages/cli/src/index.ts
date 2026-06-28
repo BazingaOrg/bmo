@@ -1,8 +1,20 @@
 #!/usr/bin/env node
 import "./env.js"; // 必须第一个 import：在 @bmo/core 读 env 之前用 .env 覆盖 shell 变量
 import { Command } from "commander";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { eatSource, isParseError, looksLikeUrl, openDb, runAgent, type ChatMessage, type ParseSource } from "@bmo/core";
+import {
+  eatSource,
+  generateWeeklyDigest,
+  isParseError,
+  looksLikeUrl,
+  openDb,
+  reembedKnowledge,
+  runAgent,
+  updateEnvFile,
+  type ChatMessage,
+  type ParseSource,
+} from "@bmo/core";
 import { runDoctor } from "./doctor.js";
 
 const program = new Command();
@@ -13,6 +25,21 @@ program
   .command("doctor")
   .description("环境自检：投喂前确认 Kimi 对话与本地 embedding 两条链路通不通")
   .action(runDoctor);
+
+/* ── bmo digest ────────────────────────────────────────── */
+program
+  .command("digest")
+  .description("生成本周消化报告")
+  .option("--force", "即使 7 天内已有周报也重新生成")
+  .action(async (opts: { force?: boolean }) => {
+    const db = openDb();
+    try {
+      const digest = await generateWeeklyDigest(db, { force: opts.force });
+      console.log(digest.markdown);
+    } finally {
+      db.close();
+    }
+  });
 
 /* ── bmo eat ───────────────────────────────────────────── */
 program
@@ -40,6 +67,42 @@ program
     } catch (error) {
       console.error(`\r投喂失败：${formatError(error)}`);
       process.exit(1);
+    } finally {
+      db.close();
+    }
+  });
+
+/* ── bmo reembed ───────────────────────────────────────── */
+program
+  .command("reembed")
+  .description("渐进重建全库 embedding，支持切换模型/维度且不删除文档")
+  .requiredOption("--model <model>", "新的 embedding 模型名")
+  .option("--base-url <url>", "新的 embedding API base URL")
+  .option("--api-key <key>", "新的 embedding API key")
+  .option("--dim <dim>", "新的 embedding 维度；不填则先探测")
+  .option("--batch-size <size>", "每批处理 chunks 数", "32")
+  .action(async (opts: { model: string; baseUrl?: string; apiKey?: string; dim?: string; batchSize?: string }) => {
+    const db = openDb();
+    try {
+      const result = await reembedKnowledge(db, {
+        model: opts.model,
+        baseUrl: opts.baseUrl,
+        apiKey: opts.apiKey,
+        dim: opts.dim ? Number(opts.dim) : undefined,
+        batchSize: opts.batchSize ? Number(opts.batchSize) : undefined,
+        onProgress: (progress) => {
+          process.stdout.write(`\r迁移 embedding：${progress.migrated}/${progress.total} · ${progress.model} · ${progress.dim} 维`);
+        },
+      });
+      console.log(`\n完成：${result.total} 个 chunks 已迁移到 ${result.model} (${result.dim} 维)。`);
+      const envPath = reembedEnvPath();
+      updateEnvFile(envPath, {
+        EMBEDDING_BASE_URL: opts.baseUrl,
+        EMBEDDING_API_KEY: opts.apiKey,
+        EMBEDDING_MODEL: result.model,
+        EMBEDDING_DIM: String(result.dim),
+      });
+      console.log(`已写入 embedding 配置：${envPath}`);
     } finally {
       db.close();
     }
@@ -96,4 +159,8 @@ program.parseAsync();
 function formatError(error: unknown): string {
   if (isParseError(error)) return error.message;
   return error instanceof Error ? error.message : String(error);
+}
+
+function reembedEnvPath(): string {
+  return process.env.BMO_REEMBED_ENV_PATH ?? resolve(process.cwd(), ".env");
 }
