@@ -15,3 +15,7 @@ packages/desktop/src-tauri/resources/sidecar/
 .DS_Store
 *.tsbuildinfo
 .pnpm-debug.log*
+
+# 本地 eval 语料(引用外部项目绝对路径)
+packages/eval/corpus.local.jsonl
+packages/eval/dataset.local.jsonl

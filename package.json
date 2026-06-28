@@ -6,6 +6,7 @@
     "build": "corepack pnpm -r build",
     "typecheck": "corepack pnpm --filter @bmo/core build && corepack pnpm -r typecheck",
     "verify:db": "corepack pnpm --filter @bmo/core verify:db",
+    "eval": "corepack pnpm --filter @bmo/eval start",
     "bmo": "corepack pnpm --filter @bmo/cli start"
   },
   "engines": { "node": ">=20" },
