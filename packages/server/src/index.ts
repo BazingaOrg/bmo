@@ -5,7 +5,21 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { randomBytes } from "node:crypto";
-import { ParseError, eatSource, isParseError, openDb, runAgentStream, type ChatMessage, type ParseSource, type SearchHit } from "@bmo/core";
+import {
+  ParseError,
+  eatSource,
+  isParseError,
+  openDb,
+  generateWeeklyDigest,
+  knowledgeStats,
+  latestDigest,
+  listDigests,
+  runAgentStream,
+  type ChatMessage,
+  type ParseSource,
+  type SearchHit,
+  type WebSource,
+} from "@bmo/core";
 import { readRuntimeSettings, updateRuntimeSettings, type SettingsPatch } from "./settings.js";
 
 type EatRequest = {
@@ -35,6 +49,7 @@ type DocumentDetail = DocumentRow & {
 };
 
 const db = openDb();
+void maybeGenerateDigestOnStartup();
 const app = new Hono();
 const authToken = process.env.BMO_SERVER_TOKEN ?? randomBytes(32).toString("hex");
 const allowedOrigins = getAllowedOrigins();
@@ -70,6 +85,23 @@ app.patch("/settings", async (c) => {
   }
 });
 
+app.get("/digests", (c) =>
+  c.json({
+    latest: latestDigest(db),
+    digests: listDigests(db),
+    stats: knowledgeStats(db),
+  })
+);
+
+app.post("/digests/generate", async (c) => {
+  try {
+    const digest = await generateWeeklyDigest(db, { force: true });
+    return c.json({ digest, latest: digest, digests: listDigests(db), stats: knowledgeStats(db) });
+  } catch (error) {
+    return c.json({ error: formatError(error) }, 500);
+  }
+});
+
 app.post("/eat", async (c) => {
   try {
     const input = await readJson<EatRequest>(c.req.raw);
@@ -89,6 +121,8 @@ app.post("/chat", async (c) => {
     let searched = false;
     let totalHits = 0;
     const provenance = new Map<number, SearchHit>();
+    let webSearched = false;
+    const webSources = new Map<string, WebSource>();
 
     try {
       await runAgentStream(db, messages, {
@@ -105,6 +139,10 @@ app.post("/chat", async (c) => {
         onSearchHits: (hits) => {
           for (const hit of hits) provenance.set(hit.chunkRowid, hit);
         },
+        onWebSearch: (payload) => {
+          webSearched = true;
+          for (const source of payload.sources) webSources.set(source.url, source);
+        },
       });
 
       await stream.writeSSE({
@@ -113,6 +151,8 @@ app.post("/chat", async (c) => {
           searched,
           totalHits,
           hits: [...provenance.values()],
+          webSearched,
+          webSources: [...webSources.values()],
         }),
       });
       await stream.writeSSE({ event: "done", data: JSON.stringify({ ok: true }) });
@@ -185,6 +225,17 @@ if (Number.isInteger(parentPid) && parentPid > 0) {
       shutdown();
     }
   }, 5_000).unref();
+}
+
+async function maybeGenerateDigestOnStartup(): Promise<void> {
+  try {
+    const latest = latestDigest(db);
+    if (!latest || Date.now() - latest.periodEnd >= 7 * 24 * 60 * 60 * 1000) {
+      await generateWeeklyDigest(db);
+    }
+  } catch {
+    /* 周报生成失败不应阻断 sidecar 启动；成长 tab 可手动重试并显示错误。 */
+  }
 }
 
 async function readJson<T>(request: Request): Promise<T> {

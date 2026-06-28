@@ -1,7 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { chunkConfig, searchConfig } from "@bmo/core";
+import { join } from "node:path";
+import { chunkConfig, readEnvFile, searchConfig, writeEnvFile } from "@bmo/core";
 
 const SETTINGS_KEYS = [
   "BMO_SIMILARITY_THRESHOLD",
@@ -45,7 +44,7 @@ export function updateRuntimeSettings(patch: SettingsPatch): RuntimeSettings {
   validatePatch(patch);
 
   const envPath = settingsEnvPath();
-  const next = new Map(readEnvFile(envPath));
+  const next = readEnvFile(envPath);
   for (const key of SETTINGS_KEYS) {
     const value = patch[key];
     if (value == null) continue;
@@ -55,8 +54,7 @@ export function updateRuntimeSettings(patch: SettingsPatch): RuntimeSettings {
     if (key === "BMO_SIMILARITY_THRESHOLD") process.env.SIMILARITY_THRESHOLD = serialized;
   }
 
-  mkdirSync(dirname(envPath), { recursive: true });
-  writeFileSync(envPath, serializeEnv(next), "utf-8");
+  writeEnvFile(envPath, next);
   return readRuntimeSettings();
 }
 
@@ -85,22 +83,4 @@ function validatePatch(patch: SettingsPatch): void {
   ) {
     throw new Error("chunk overlap 必须小于 chunk max chars");
   }
-}
-
-function readEnvFile(path: string): [string, string][] {
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf-8")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"))
-    .map((line) => {
-      const index = line.indexOf("=");
-      if (index < 0) return null;
-      return [line.slice(0, index).trim(), line.slice(index + 1).trim()] as [string, string];
-    })
-    .filter((entry): entry is [string, string] => entry != null && entry[0].length > 0);
-}
-
-function serializeEnv(values: Map<string, string>): string {
-  return `${[...values.entries()].map(([key, value]) => `${key}=${value}`).join("\n")}\n`;
 }
