@@ -1,24 +1,29 @@
-# BMO Phase 3 · MCP + 养成 + 本地化执行计划
+# BMO Phase 3 · 联网 + 养成 + 工程化执行计划
 
-> 把 BMO 的库通过 MCP 暴露给 Claude Desktop / Claude Code;每周自动产出"消化报告";
-> 补齐 embedding 迁移工程与离线 Vision OCR 兜底——"一个核心,三个出口"的最后一个出口。
+> 让 BMO 在对话时能联网("我存过的 + 最新的"一起答)、每周自动产出消化报告(成长 tab)、
+> 并补齐换 embedding 模型的迁移工程。
 >
 > 本文是 step-by-step 施工图。总纲见 [`plan.md`](./plan.md);前序见 [`phase1.md`](./phase1.md)、[`phase2.md`](./phase2.md)。
+
+> **本阶段范围调整(基于讨论确定)**:
+> - ❌ 砍掉离线对话(本地模型 tool-use 明显降档,无离线需求)与离线 Vision OCR(Kimi vision 已够用)。
+> - 🔁 MCP 从"BMO 当 server 暴露给 Claude"改为"**BMO 当 client,对话时自己调工具**"——这才是"做进 BMO"、对日常有用。
+> - 📊 每周消化报告投递走**桌面"成长" tab**(不做邮件/SMTP)。
 
 ---
 
 ## 0. 目标与验收标准
 
-**交付**:① stdio MCP server(`search_memo` / `add_note`)注册进 Claude Desktop & Claude Code;② 每周消化报告(Orchestrator-Workers);③ embedding 迁移工程(换模型不删库);④ 离线 Vision OCR 兜底(Apple Vision)。
+**交付**:① 对话时 BMO 能联网检索 + 抓取(`web_search` / `fetch_url`),与库内检索并用;② agent 工具层"来源无关",为后续插 MCP 工具预留;③ 每周消化报告在"成长" tab 展示;④ `bmo reembed` 换 embedding 模型不删库。
 
 **验收清单**:
-1. 在 **Claude Code / Claude Desktop 里直接调 BMO**:问"我库里关于猪周期的内容" → 它通过 MCP 调 `search_memo` 拿到你投喂过的内容并带来源。
-2. 在 Claude 里说"帮我记一条:XXX" → 通过 `add_note` 入库,下次能搜到。
-3. **每周一**收到一份消化报告(本周吞了多少、聚成哪几类主题、每类摘要、最常被引用来源)。
-4. `bmo reembed` 能把全库迁移到新 embedding 模型而**不删数据**(渐进重建 + 版本字段)。
-5. **离线模式**:断网时截图走 Apple Vision OCR(而非 Kimi vision)仍能转写入库。
+1. 问一个需要最新信息的问题(如"美光最近的财报数据,结合我库里的分析") → BMO **既调 `search_knowledge`(库) 又调 `web_search`/`fetch_url`(联网)**,回答里库内来源用`【来源：标题】`、联网来源给链接。
+2. 闲聊/纯库内问题时,**不乱联网**(和"不盲目检索"同一套克制逻辑)。
+3. 工具派发"来源无关":新增一个工具(native 或将来 MCP)不用改派发主干。
+4. 进"成长" tab 能看到**本周消化报告**(吞了多少、聚成哪几类主题、每类摘要、最常引用来源)。
+5. `bmo reembed --model <new>` 把全库迁到新 embedding 模型,**零数据丢失**,迁完 eval recall@5 不崩。
 
-**不做**(范围控制):多端同步、知识图谱、移动端。离线对话模型(本地 Qwen/Gemma)列为可选,不阻塞验收。
+**不做**:离线对话、离线 OCR、MCP server(降级为可选学习项,见末节)、多端同步、知识图谱。
 
 ---
 
@@ -26,152 +31,117 @@
 
 | 项 | 说明 |
 |---|---|
-| **MCP SDK** | `@modelcontextprotocol/sdk`(stdio transport)。装进新包 `packages/mcp`。 |
-| **运行依赖** | MCP server 搜索要 embedding → 需 Ollama bge-m3 在跑;写库共用 `~/.bmo/bmo.db`。 |
-| **周报模型** | 复用 Kimi(`BMO_CHAT_*`)做聚类摘要;离线时可切本地模型。 |
-| **Swift 工具链** | Vision OCR sidecar 用 `swiftc` 编译(macOS 自带);约 50 行 Swift。 |
-| **调度** | 周报定时用 macOS `launchd`(plist),不引第三方 cron。 |
+| **Web search API** | 选一个面向 agent 的搜索 API(Tavily / Brave Search / Serper),填 `BMO_SEARCH_API_KEY` + provider。`fetch_url` 复用 Phase 2 的 `parseUrl`,不用新依赖。 |
+| **沿用环境** | Kimi(对话/工具调用)+ 本地 bge-m3(向量)。 |
+| **(可选)MCP SDK** | 仅当将来做"可插拔 MCP 工具"或末节的 server 出口时才装 `@modelcontextprotocol/sdk`。 |
 
 ---
 
-## 2. 架构:第三个出口
+## 2. 架构:工具来源无关的 agent
 
 ```
-        ┌─────────────── @bmo/core(不变)───────────────┐
-        │  openDb / eatSource / searchKnowledge / embed   │
-        └───┬───────────────┬───────────────┬────────────┘
-            ▼               ▼               ▼
-   packages/cli      packages/server   packages/mcp ← 新增
-   (Phase 0)         (Phase 1/2)        (stdio MCP,Phase 3)
-                                              │
-                              Claude Desktop / Claude Code 作为 MCP 客户端
+对话 → runAgentStream
+        └ TOOLS = [ 内置工具 ⊕ (将来) MCP 工具 ]   ← 合并成一个列表
+              ├ search_knowledge   (本地库, 已有)
+              ├ web_search         (联网搜, Phase 3 新增 native)
+              ├ fetch_url          (抓正文, 复用 Phase 2 parseUrl)
+              └ <future MCP tools> (预留:连外部 MCP server 自动发现)
+        └ 派发按"工具名 → 处理器"查表,不关心工具来源
 ```
 
-**关键**:MCP server 又是 core 的一层薄壳——只把 `searchKnowledge` / `eatSource` 包成 MCP 工具,模型由 MCP 客户端(Claude)自带,BMO 不出 chat 模型。周报/迁移/OCR 是 core + CLI 的扩展,不动既有出口。
+**关键**:把现在写死的 `if name === "search_knowledge"` 改成**注册表**(`Map<name, handler>` + schema 列表)。native 工具直接注册;将来 MCP client 把发现的工具也注册进同一张表。**先 native 联网,后插 MCP,派发主干不返工。**
 
 ---
 
-## 3. Milestone A · MCP server(stdio)
+## 3. Milestone A · 对话联网(工具来源无关 + web_search + fetch_url)
 
-> 目标:**在 Claude Code 里直接查/写 BMO 的库**。Phase 3 的头号交付。
+> 目标:BMO 对话时能"我的库 + 最新的"一起答——它甩开静态笔记和通用 Claude 的关键。
 
-### A1. 建 `packages/mcp`
-- 依赖 `@modelcontextprotocol/sdk`、`@bmo/core`、`dotenv`。
-- `src/env.ts` 绝对路径加载 `packages/cli/.env` + `~/.bmo/.env`(同 server/eval),拿到 EMBEDDING_*。
-- `src/index.ts`:用 stdio transport 起一个 `McpServer`,开同一个 `~/.bmo/bmo.db`。
+### A1. agent 工具改注册表(来源无关)
+- 把 `loop.ts` 的工具定义 + 执行改成 `ToolRegistry`:`{ schema, handler }` 按名字注册;`runAgent/runAgentStream` 遍历注册表生成 `tools`,按名字派发。
+- `search_knowledge` 迁成第一个注册项(行为不变,回归测试)。
 
-### A2. 暴露工具
-| 工具 | 映射 | 说明 |
-|---|---|---|
-| `search_memo` | `searchKnowledge(db, query, top_k)` | 返回命中文本 + 标题 + 来源 + 相似度;description 里写清"查用户个人知识库" |
-| `add_note` | `eatSource(db, {kind:"text", ...})` | 随手记一条入库 |
-| `list_recent`(可选) | 查 documents 最近 N 条 | 让模型了解库里有什么 |
+### A2. `web_search` (native)
+- 新工具 `web_search(query, top_k?)` → 调搜索 API → 返回 `[{title, url, snippet}]`。
+- description 写清调用条件:**仅当问题需要最新/库外信息时**调用(和库检索一样克制,呼应验收 #2)。
 
-- 工具结果格式复用 Phase 0 的来源标注,Claude 那边就能带 `【来源】`。
+### A3. `fetch_url` (复用 Phase 2)
+- 新工具 `fetch_url(url)` → 调 `parseUrl` 抓正文转 Markdown 返回(超时/反爬错误已在 Phase 2 处理好)。
+- 典型链:`web_search` 拿到链接 → 模型挑一条 → `fetch_url` 读全文 → 结合库内作答。
 
-### A3. 注册进客户端
-- 产出一段配置片段(`claude_desktop_config.json` / Claude Code 的 mcp 配置):
-  ```json
-  { "mcpServers": { "bmo": { "command": "node", "args": ["<abs>/packages/mcp/dist/index.js"] } } }
-  ```
-- 文档写清:需 Ollama 在跑;打包后可指向单二进制。
+### A4. provenance 扩展
+- 联网来源在回答里给链接;桌面端来源徽章区分 📚 库内 / 🌐 联网,延续 Phase 1/2 的来源可视化。
 
-### A4. 验证
-- 在 Claude Code 里 `/mcp` 看到 bmo;问一个库内问题,确认走 `search_memo` 并带来源。
-
-**Milestone A 完成 = Claude 里能查/写 BMO 库。(验收 #1、#2)**
+**Milestone A 完成 = 对话能联网且克制、来源可辨。(验收 #1、#2、#3)**
 
 ---
 
-## 4. Milestone B · 每周消化报告(Orchestrator-Workers)
+## 4. Milestone B · 每周消化报告 + 成长 tab(Orchestrator-Workers)
 
-> 目标:把"养成"做实——每周自动告诉你吃了什么、消化出什么。
+> 目标:把"养成"做实——每周在成长 tab 告诉你吃了什么、消化出什么。
 
 ### B1. 取数与聚类
-- 取最近 7 天的 chunks(`created_at`)。
-- 用已存向量做**聚类**(k-means 或基于余弦阈值的简单聚类),分成若干主题簇。
+- 取最近 7 天 chunks;用已存向量做聚类(先简单余弦阈值聚类 + 簇数上限,后续可上 k-means)分主题簇。
 
 ### B2. Orchestrator-Workers
-- **Workers**:每个簇并发调 Kimi 出一段"这一簇讲了什么"的摘要。
-- **Orchestrator**:把各簇摘要 + 统计(本周吞 N 篇/M 块、最常来源、来源类型分布)汇总成一份周报 Markdown。
-- 这是 orchestration 的实战练习(对应学习映射)。
+- **Workers**:每簇并发调 Kimi 出"这一簇讲了啥"的摘要。
+- **Orchestrator**:汇总各簇摘要 + 统计(本周 N 篇/M 块、最常来源、来源类型分布)成一份周报 Markdown。
 
-### B3. 投递与展示
-- 存成文档(可入库,sourceType=text);桌面端"成长" tab 展示;`notification` 提醒。
-- `bmo digest`(CLI)手动触发;**launchd plist** 每周一早上自动跑。
+### B3. 成长 tab 展示 + 触发时机
+- 桌面端启用"成长" tab:展示**最新周报 + 历史周报列表** + 基础统计(总篇/块、最常被引用来源)。
+- 触发:`bmo digest` 手动 + **App 启动时检查"距上次≥7天就生成"**(无需 launchd,纯应用内调度)。
+- 周报本身可入库(sourceType=text),让它也能被检索。
 
-**Milestone B 完成 = 每周一收到消化报告。(验收 #3)**
+**Milestone B 完成 = 成长 tab 有每周消化报告。(验收 #4)**
 
 ---
 
 ## 5. Milestone C · Embedding 迁移工程(渐进重建)
 
-> 目标:换 embedding 模型时**不删库**。注:我们当前已用本地 bge-m3,本里程碑是把"换模型"这条路打通,而非首次本地化。
+> 目标:换 embedding 模型时**不删库**。(当前已用本地 bge-m3,本里程碑打通"换模型"这条路。)
 
 ### C1. 版本字段已就位
-- `chunks.embedding_model` 已记录每块用的模型(Phase 0 建表时预留)。
+- `chunks.embedding_model` 已记录每块所用模型(Phase 0 预留)。
 
-### C2. 重建工具
-- `bmo reembed --model <new> [--base-url ...]`:
-  1. 若新模型维度不同 → 新建 `vec_chunks_v2(float[新维])`;
-  2. 分批拉出 chunks → 用新模型 `embed` → 写新向量 + 更新 `embedding_model`;
-  3. 全部迁完 → 切换检索读新表 → 删旧表。
-- **渐进**:可中断续跑(按 embedding_model 过滤未迁的),不锁库。
+### C2. `bmo reembed`
+- `bmo reembed --model <new> [--base-url/--dim ...]`:
+  1. 维度变了 → 新建 `vec_chunks_v2(float[新维])`;
+  2. 分批拉未迁 chunks → 新模型 `embed` → 写新向量 + 更新 `embedding_model`;
+  3. 全迁完 → 检索切新表 → 删旧表。
+- **可中断续跑**(按 `embedding_model` 过滤未迁),不锁库。
 
-### C3. 验证
-- 迁到另一个 embedding 模型后,eval 的 recall@5 不崩;旧数据零丢失。
-
-**Milestone C 完成 = 换 embedding 模型可平滑迁移。(验收 #4)**
+**Milestone C 完成 = 换 embedding 模型平滑迁移、零丢失。(验收 #5)**
 
 ---
 
-## 6. Milestone D · 离线 Vision OCR 兜底(Apple Vision)
+## 6. (可选)BMO 当 MCP server / 接外部 MCP 工具
 
-> 目标:断网/省钱时,截图不走 Kimi vision,改用本机 ANE 上的 Apple Vision OCR。
+> 两个"将来想做再做"的扩展,本阶段不阻塞:
 
-### D1. Swift sidecar
-- ~50 行 Swift:`VNRecognizeTextRequest`(中文好、离线、走 ANE、免费),`swiftc` 编译成 `bmo-ocr <image>` CLI,输出纯文本。
-
-### D2. 接进 image parser
-- `parse/image.ts` 加分支:`BMO_VISION_MODE=ocr`(或检测断网)→ 调 `bmo-ocr` 取文字,而非 Kimi vision。
-- OCR 出的是纯文字(无图表语义),作为离线兜底可接受;在线默认仍用 vision(质量更高)。
-
-### D3. 验证
-- 断网截图投喂,Apple Vision 转写入库成功。
-
-**Milestone D 完成 = 离线截图可转写。(验收 #5)**
+- **接外部 MCP 工具(client)**:A1 的注册表已预留——加一个 MCP client,连配置好的 MCP server,`listTools` → 注册进同一张表。这样 BMO 能像 Claude Desktop 那样插社区工具(GitHub/文件/行情…)。**当你想要可插拔扩展时再做。**
+- **暴露为 MCP server**:`packages/mcp` 把 `search_memo`/`add_note` 暴露给 Claude Desktop/Code(core 的又一薄壳,约 150 行)。**纯学习/作品集向**,对日常用处不大(你的库内容和 coding session 不重叠)。
 
 ---
 
-## 7. (可选)Milestone E · 离线对话模式
-
-> 目标:完全断网也能用——本地小模型兜底对话。
-
-- Ollama 跑 Qwen/Gemma 量化模型;`BMO_CHAT_BASE_URL` 指向本地。
-- ⚠️ 本地模型 tool-calling 弱于 Kimi,"不盲目检索"质量会降——仅作断网兜底,默认仍用 Kimi。
-
----
-
-## 8. 风险与对策
+## 7. 风险与对策
 
 | 风险 | 对策 |
 |---|---|
-| MCP server 启动时 Ollama 没跑 → 搜索失败 | 工具返回清晰错误提示"先启动 Ollama" |
-| MCP 子进程拿不到 env | env.ts 绝对路径加载,同 server/eval |
-| 周报聚类质量不稳 | 先用简单阈值聚类 + 数量上限,逐步引入 k-means |
-| 重建 embedding 期间检索不一致 | 迁移期双表并存,切换原子化;失败可续跑 |
-| Apple Vision 中文识别边界 | 仅作离线兜底,在线默认 vision;扫描件/复杂图表标注局限 |
-| launchd plist 配置坑 | 提供现成 plist 模板 + `launchctl` 安装说明 |
+| 联网工具被滥用(闲聊也搜) | description 写明调用条件;低相关时模型自抑(同"不盲目检索") |
+| web search API 成本/限频 | 选有免费额度的(Tavily);加结果数上限与超时 |
+| 抓取反爬/超时 | 复用 Phase 2 `parseUrl` 已有的超时/403 兜底 |
+| 周报聚类质量不稳 | 先简单阈值聚类 + 簇数上限,逐步引入 k-means |
+| 重建 embedding 期间检索不一致 | 迁移期双表并存,切换原子化,失败可续跑 |
+| 投喂量小 → 周报很薄 | 周报按"过去 7 天",量小就如实简短,不硬凑 |
 
 ---
 
-## 9. 完成定义(Definition of Done)
+## 8. 完成定义(Definition of Done)
 
-- [ ] Milestone A:`packages/mcp` stdio server,Claude Code/Desktop 能 `search_memo` / `add_note`
-- [ ] Milestone B:`bmo digest` + launchd 每周一消化报告(Orchestrator-Workers)
-- [ ] Milestone C:`bmo reembed` 渐进迁移 embedding 模型,零数据丢失
-- [ ] Milestone D:Apple Vision OCR sidecar,离线截图可转写
-- [ ] (可选)Milestone E:本地模型离线对话
+- [ ] Milestone A:agent 工具注册表(来源无关)+ `web_search` + `fetch_url`,对话能联网且克制
+- [ ] Milestone B:成长 tab + 每周消化报告(Orchestrator-Workers,应用内调度)
+- [ ] Milestone C:`bmo reembed` 渐进迁移 embedding 模型,零丢失
 - [ ] 跑通第 0 节全部 5 条验收标准
+- [ ] (可选)接外部 MCP 工具 / 暴露 MCP server
 
-**推荐施工顺序**:A(头号价值,先打通 MCP)→ B(养成主线)→ C/D(工程化与本地化,可并行)→ E 可选。
+**推荐施工顺序**:A(联网,日常价值最高)→ B(养成主线)→ C(工程化)。MCP 的两个扩展按需再说。
