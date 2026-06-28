@@ -5,9 +5,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { basename, extname } from "node:path";
-import { eat, openDb, runAgentStream, type ChatMessage, type SearchHit } from "@bmo/core";
+import { ParseError, eatSource, isParseError, openDb, runAgentStream, type ChatMessage, type ParseSource, type SearchHit } from "@bmo/core";
+import { readRuntimeSettings, updateRuntimeSettings, type SettingsPatch } from "./settings.js";
 
 type EatRequest = {
   text?: string;
@@ -30,6 +29,11 @@ type DocumentRow = {
   chunkCount: number;
 };
 
+type DocumentDetail = DocumentRow & {
+  markdown: string;
+  chunks: { rowid: number; seq: number; text: string }[];
+};
+
 const db = openDb();
 const app = new Hono();
 const authToken = process.env.BMO_SERVER_TOKEN ?? randomBytes(32).toString("hex");
@@ -40,7 +44,7 @@ app.use(
   "*",
   cors({
     origin: (origin) => (allowedOrigins.has(origin) ? origin : ""),
-    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
   })
 );
@@ -55,33 +59,26 @@ app.use("*", async (c, next) => {
 
 app.get("/health", (c) => c.json({ ok: true }));
 
-app.post("/eat", async (c) => {
-  const input = await readJson<EatRequest>(c.req.raw);
-  const rawPath = input.rawPath?.trim();
-  let markdown = input.text ?? "";
-  let title = input.title?.trim();
+app.get("/settings", (c) => c.json({ settings: readRuntimeSettings() }));
 
-  if (rawPath) {
-    const ext = extname(rawPath).toLowerCase();
-    if (![".md", ".markdown", ".txt"].includes(ext)) {
-      return c.json({ error: `Phase 1 只吃 .md/.txt，${ext || "未知格式"} 留给 Phase 2` }, 400);
-    }
-    markdown = await readFile(rawPath, "utf-8");
-    title ||= basename(rawPath, ext);
+app.patch("/settings", async (c) => {
+  try {
+    const input = await readJson<SettingsPatch>(c.req.raw);
+    return c.json({ settings: updateRuntimeSettings(input) });
+  } catch (error) {
+    return c.json({ error: formatError(error) }, 400);
   }
+});
 
-  if (!markdown.trim()) return c.json({ error: "内容为空，没东西可吃" }, 400);
-  title ||= markdown.trim().slice(0, 24) + (markdown.trim().length > 24 ? "..." : "");
-
-  const result = await eat(db, {
-    title,
-    markdown,
-    sourceType: rawPath ? "text" : input.sourceUrl ? "url" : "text",
-    sourceUrl: input.sourceUrl,
-    rawPath,
-  });
-
-  return c.json({ ...result, title });
+app.post("/eat", async (c) => {
+  try {
+    const input = await readJson<EatRequest>(c.req.raw);
+    const source = eatRequestToSource(input);
+    const result = await eatSource(db, source);
+    return c.json({ documentId: result.documentId, chunkCount: result.chunkCount, title: result.title });
+  } catch (error) {
+    return c.json({ error: formatError(error) }, isParseError(error) ? 400 : 500);
+  }
 });
 
 app.post("/chat", async (c) => {
@@ -144,6 +141,26 @@ app.get("/documents", (c) => {
   return c.json({ documents: rows });
 });
 
+app.get("/documents/:id", (c) => {
+  const id = c.req.param("id");
+  const row = db
+    .prepare(
+      `SELECT d.id, d.title, d.source_type AS sourceType, d.source_url AS sourceUrl,
+              d.raw_path AS rawPath, d.markdown, d.created_at AS createdAt, COUNT(c.id) AS chunkCount
+       FROM documents d
+       LEFT JOIN chunks c ON c.document_id = d.id
+       WHERE d.id = ?
+       GROUP BY d.id`
+    )
+    .get(id) as DocumentDetail | undefined;
+
+  if (!row) return c.json({ error: "Document not found" }, 404);
+  row.chunks = db
+    .prepare(`SELECT rowid, seq, text FROM chunks WHERE document_id = ? ORDER BY seq`)
+    .all(id) as DocumentDetail["chunks"];
+  return c.json({ document: row });
+});
+
 const requestedPort = Number(process.env.PORT ?? getArgValue("--port") ?? 0);
 const hostname = process.env.HOST ?? "127.0.0.1";
 const server = serve({ fetch: app.fetch, hostname, port: requestedPort }, (info) => {
@@ -175,6 +192,22 @@ async function readJson<T>(request: Request): Promise<T> {
   const text = await request.text();
   if (!text.trim()) return {} as T;
   return JSON.parse(text) as T;
+}
+
+function eatRequestToSource(input: EatRequest): ParseSource {
+  const title = input.title?.trim() || undefined;
+  const rawPath = input.rawPath?.trim();
+  const sourceUrl = input.sourceUrl?.trim();
+  const text = input.text ?? "";
+
+  if (rawPath) return { kind: "file", path: rawPath, title };
+  if (sourceUrl) return { kind: "url", url: sourceUrl, title };
+  if (text.trim()) return { kind: "text", text, title };
+  throw new ParseError("empty-content", "内容为空，没东西可吃");
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeMessages(messages: ChatRequest["messages"]): ChatMessage[] {
