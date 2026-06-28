@@ -4,14 +4,21 @@ import { type DB, vecToBlob } from "../db/index.js";
 /* ──────────────── 切块 ──────────────── */
 
 const SEPARATORS = ["\n## ", "\n### ", "\n\n", "\n", "。", ". "];
-const MAX_CHARS = 1000; // 中文场景下约 500-600 token，Phase 2 用 eval 调参
-const OVERLAP = 120;
+const DEFAULT_MAX_CHARS = 1000; // 中文场景下约 500-600 token，Phase 2 用 eval 调参
+const DEFAULT_OVERLAP = 120;
 
 /** 递归切块：优先按大结构切，切不动再降级到小分隔符 */
-export function chunkText(text: string, maxChars = MAX_CHARS): string[] {
+export function chunkText(text: string, maxChars = chunkConfig().maxChars): string[] {
   const out: string[] = [];
   split(text.trim(), 0, out, maxChars);
-  return withOverlap(mergeTiny(out.filter((c) => c.trim().length > 0)));
+  return withOverlap(mergeTiny(out.filter((c) => c.trim().length > 0)), chunkConfig().overlap);
+}
+
+export function chunkConfig(): { maxChars: number; overlap: number } {
+  return {
+    maxChars: positiveInt(process.env.BMO_CHUNK_MAX_CHARS, DEFAULT_MAX_CHARS),
+    overlap: nonNegativeInt(process.env.BMO_CHUNK_OVERLAP, DEFAULT_OVERLAP),
+  };
 }
 
 /** 不足 100 字符的碎块（如孤立标题）向后合并，避免浪费 embedding、污染检索 */
@@ -63,8 +70,19 @@ function split(text: string, sepIdx: number, out: string[], maxChars: number): v
 }
 
 /** 给相邻块加少量重叠，缓解切断句义 */
-function withOverlap(chunks: string[]): string[] {
-  return chunks.map((c, i) => (i === 0 ? c : chunks[i - 1].slice(-OVERLAP) + c));
+function withOverlap(chunks: string[], overlap: number): string[] {
+  if (overlap <= 0) return chunks;
+  return chunks.map((c, i) => (i === 0 ? c : chunks[i - 1].slice(-overlap) + c));
+}
+
+function positiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 /* ──────────────── Embedding ──────────────── */
