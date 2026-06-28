@@ -1,9 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { Bot, Brain, ChevronRight, Loader2, MessageCircle, Search, Send, Sparkles } from "lucide-vue-next";
+import { Bot, Brain, ChevronRight, Loader2, MessageCircle, Save, Search, Send, SlidersHorizontal, Sparkles, X } from "lucide-vue-next";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { getDesktopStatus, getServerUrl, showCaptureWindow, type SearchHit } from "../api";
+import {
+  getDesktopStatus,
+  getDocument,
+  getServerUrl,
+  getSettings,
+  showCaptureWindow,
+  updateSettings,
+  type DocumentDetail,
+  type RuntimeSettings,
+  type SearchHit,
+} from "../api";
 import { useChatStore, type UiMessage } from "../stores/chat";
 
 const chat = useChatStore();
@@ -12,6 +22,13 @@ const ready = ref(false);
 const startupError = ref<string | null>(null);
 const shortcutError = ref<string | null>(null);
 const selectedHit = ref<SearchHit | null>(null);
+const selectedDocument = ref<DocumentDetail | null>(null);
+const sourceError = ref<string | null>(null);
+const sourceLoading = ref(false);
+const settingsOpen = ref(false);
+const settingsBusy = ref(false);
+const settingsFeedback = ref<string | null>(null);
+const settingsDraft = ref<RuntimeSettings | null>(null);
 const scrollArea = ref<HTMLElement | null>(null);
 
 const subtitle = computed(() => (ready.value ? "sidecar ready" : "BMO 启动中"));
@@ -63,6 +80,84 @@ function sourceHits(message: UiMessage): SearchHit[] {
   const referenced = hits.filter((hit) => message.content.includes(`【来源：${hit.documentTitle}】`));
   return referenced.length > 0 ? referenced : hits;
 }
+
+const sourceHighlightParts = computed(() => {
+  if (!selectedHit.value || !selectedDocument.value) return [{ text: "", highlighted: false }];
+  return splitForHighlight(selectedDocument.value.markdown, selectedHit.value.text);
+});
+
+async function openSource(hit: SearchHit): Promise<void> {
+  selectedHit.value = hit;
+  selectedDocument.value = null;
+  sourceError.value = null;
+  sourceLoading.value = true;
+  try {
+    selectedDocument.value = await getDocument(hit.documentId);
+  } catch (error) {
+    sourceError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    sourceLoading.value = false;
+  }
+}
+
+async function openSettings(): Promise<void> {
+  settingsOpen.value = true;
+  settingsFeedback.value = null;
+  settingsBusy.value = true;
+  try {
+    settingsDraft.value = await getSettings();
+  } catch (error) {
+    settingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    settingsBusy.value = false;
+  }
+}
+
+async function saveSettings(): Promise<void> {
+  if (!settingsDraft.value) return;
+  settingsBusy.value = true;
+  settingsFeedback.value = null;
+  try {
+    settingsDraft.value = await updateSettings({
+      BMO_SIMILARITY_THRESHOLD: settingsDraft.value.similarityThreshold,
+      BMO_RECALL_K: settingsDraft.value.recallK,
+      BMO_RRF_K: settingsDraft.value.rrfK,
+      BMO_CHUNK_MAX_CHARS: settingsDraft.value.chunkMaxChars,
+      BMO_CHUNK_OVERLAP: settingsDraft.value.chunkOverlap,
+    });
+    settingsFeedback.value = "已保存";
+  } catch (error) {
+    settingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    settingsBusy.value = false;
+  }
+}
+
+function splitForHighlight(markdown: string, chunk: string): { text: string; highlighted: boolean }[] {
+  const exact = markdown.indexOf(chunk);
+  if (exact >= 0) return splitAt(markdown, exact, chunk.length);
+
+  const normalizedChunk = chunk.trim();
+  const candidates = [
+    normalizedChunk,
+    normalizedChunk.slice(Math.max(0, normalizedChunk.length - 800)),
+    normalizedChunk.slice(0, 800),
+  ].filter((candidate) => candidate.length >= 80);
+
+  for (const candidate of candidates) {
+    const index = markdown.indexOf(candidate);
+    if (index >= 0) return splitAt(markdown, index, candidate.length);
+  }
+  return [{ text: markdown, highlighted: false }];
+}
+
+function splitAt(text: string, start: number, length: number): { text: string; highlighted: boolean }[] {
+  return [
+    { text: text.slice(0, start), highlighted: false },
+    { text: text.slice(start, start + length), highlighted: true },
+    { text: text.slice(start + length), highlighted: false },
+  ].filter((part) => part.text.length > 0);
+}
 </script>
 
 <template>
@@ -113,6 +208,9 @@ function sourceHits(message: UiMessage): SearchHit[] {
             <span><i class="bg-white" />通用</span>
             <span><i class="bg-[#F5C84C]" />未命中</span>
           </div>
+          <button class="icon-button" type="button" aria-label="检索设置" @click="openSettings">
+            <SlidersHorizontal :size="18" />
+          </button>
         </header>
 
         <div ref="scrollArea" class="flex-1 overflow-y-auto px-6 py-6">
@@ -150,7 +248,7 @@ function sourceHits(message: UiMessage): SearchHit[] {
                     :key="hit.chunkRowid"
                     class="source-chip"
                     type="button"
-                    @click="selectedHit = hit"
+                    @click="openSource(hit)"
                   >
                     {{ hit.documentTitle }}
                     <span v-if="hit.similarity != null">{{ hit.similarity.toFixed(2) }}</span>
@@ -180,14 +278,94 @@ function sourceHits(message: UiMessage): SearchHit[] {
     <div v-if="selectedHit" class="source-panel" role="dialog" aria-label="来源卡片">
       <button class="source-panel-backdrop" type="button" aria-label="关闭来源卡片" @click="selectedHit = null" />
       <aside class="source-panel-card">
-        <p class="font-mono text-[11px] uppercase text-[var(--bmo-muted)]">source chunk</p>
+        <p class="font-mono text-[11px] uppercase text-[var(--bmo-muted)]">source document</p>
         <h2 class="mt-1 text-xl font-semibold">{{ selectedHit.documentTitle }}</h2>
         <p class="mt-2 text-sm text-[var(--bmo-muted)]">
           {{ selectedHit.sourceType }}
           <span v-if="selectedHit.similarity != null"> · 相似度 {{ selectedHit.similarity.toFixed(2) }}</span>
         </p>
-        <div class="mt-5 rounded-bmo bg-[var(--bmo-canvas)] p-4 text-sm leading-7 text-[var(--bmo-ink)]">
-          {{ selectedHit.text }}
+        <a
+          v-if="selectedHit.sourceUrl"
+          class="mt-2 block truncate text-sm text-[var(--bmo-deep)] underline"
+          :href="selectedHit.sourceUrl"
+          target="_blank"
+          rel="noreferrer"
+        >
+          {{ selectedHit.sourceUrl }}
+        </a>
+
+        <div v-if="sourceLoading" class="mt-5 flex items-center gap-2 text-sm text-[var(--bmo-muted)]">
+          <Loader2 :size="15" class="animate-spin" />
+          正在打开原文...
+        </div>
+        <div v-else-if="sourceError" class="mt-5 rounded-bmo bg-[rgba(228,80,75,0.12)] p-3 text-sm text-[var(--bmo-red)]">
+          {{ sourceError }}
+        </div>
+        <div v-else-if="selectedDocument" class="mt-5">
+          <div class="rounded-bmo bg-[var(--bmo-canvas)] p-4 font-mono text-xs leading-6 text-[var(--bmo-ink)] whitespace-pre-wrap">
+            <template v-for="(part, index) in sourceHighlightParts" :key="index">
+              <mark v-if="part.highlighted" class="rounded bg-[#F5C84C]/55 px-1 text-[var(--bmo-ink)]">{{ part.text }}</mark>
+              <span v-else>{{ part.text }}</span>
+            </template>
+          </div>
+          <div class="mt-4 rounded-bmo border border-[rgba(15,92,85,0.12)] p-4">
+            <p class="font-mono text-[11px] uppercase text-[var(--bmo-muted)]">matched chunk</p>
+            <p class="mt-2 whitespace-pre-wrap text-sm leading-7 text-[var(--bmo-ink)]">{{ selectedHit.text }}</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div v-if="settingsOpen" class="source-panel" role="dialog" aria-label="检索设置">
+      <button class="source-panel-backdrop" type="button" aria-label="关闭检索设置" @click="settingsOpen = false" />
+      <aside class="source-panel-card">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="font-mono text-[11px] uppercase text-[var(--bmo-muted)]">retrieval settings</p>
+            <h2 class="mt-1 text-xl font-semibold">检索参数</h2>
+          </div>
+          <button class="icon-button" type="button" aria-label="关闭" @click="settingsOpen = false">
+            <X :size="18" />
+          </button>
+        </div>
+
+        <div v-if="settingsBusy && !settingsDraft" class="mt-5 flex items-center gap-2 text-sm text-[var(--bmo-muted)]">
+          <Loader2 :size="15" class="animate-spin" />
+          读取中...
+        </div>
+        <form v-else-if="settingsDraft" class="mt-5 space-y-4" @submit.prevent="saveSettings">
+          <label class="settings-field">
+            <span>相似度阈值</span>
+            <input v-model.number="settingsDraft.similarityThreshold" min="0" max="1" step="0.01" type="number" />
+          </label>
+          <label class="settings-field">
+            <span>每路召回数</span>
+            <input v-model.number="settingsDraft.recallK" min="1" step="1" type="number" />
+          </label>
+          <label class="settings-field">
+            <span>RRF K</span>
+            <input v-model.number="settingsDraft.rrfK" min="1" step="1" type="number" />
+          </label>
+          <label class="settings-field">
+            <span>Chunk max chars</span>
+            <input v-model.number="settingsDraft.chunkMaxChars" min="1" step="50" type="number" />
+          </label>
+          <label class="settings-field">
+            <span>Chunk overlap</span>
+            <input v-model.number="settingsDraft.chunkOverlap" min="0" step="10" type="number" />
+          </label>
+          <p class="truncate text-xs text-[var(--bmo-muted)]">{{ settingsDraft.envPath }}</p>
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-sm text-[var(--bmo-muted)]">{{ settingsFeedback }}</span>
+            <button class="bmo-button" type="submit" :disabled="settingsBusy">
+              <Loader2 v-if="settingsBusy" :size="15" class="animate-spin" />
+              <Save v-else :size="15" />
+              保存
+            </button>
+          </div>
+        </form>
+        <div v-else-if="settingsFeedback" class="mt-5 rounded-bmo bg-[rgba(228,80,75,0.12)] p-3 text-sm text-[var(--bmo-red)]">
+          {{ settingsFeedback }}
         </div>
       </aside>
     </div>

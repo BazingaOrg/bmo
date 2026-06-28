@@ -201,6 +201,14 @@ textarea:focus-visible {
     @apply absolute right-5 top-5 h-[calc(100vh-40px)] w-[420px] overflow-y-auto rounded-bmo-lg bg-[var(--bmo-cream)] p-5 text-[var(--bmo-ink)] shadow-lift;
   }
 
+  .settings-field {
+    @apply grid gap-2 text-sm font-medium text-[var(--bmo-ink)];
+  }
+
+  .settings-field input {
+    @apply h-10 rounded-bmo bg-[var(--bmo-surface-strong)] px-3 font-mono text-sm text-[var(--bmo-ink)] shadow-soft;
+  }
+
   .prose-bmo {
     @apply text-[15px] leading-7;
     text-wrap: pretty;

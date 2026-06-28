@@ -4,11 +4,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { Bot, ClipboardPaste, FileText, Image, Loader2, Send, X } from "lucide-vue-next";
-import { captureScreenshot, eatFile, eatText, hideCurrentWindow, showMainWindow } from "../api";
+import { captureScreenshot, eatFile, eatText, eatUrl, hideCurrentWindow, showMainWindow } from "../api";
 
 const text = ref("");
 const status = ref<"idle" | "eating" | "done" | "error">("idle");
-const feedback = ref("粘贴文字、拖入 .md/.txt，或截一张图");
+const feedback = ref("粘贴文字、URL、文件，或截一张图");
 const input = ref<HTMLTextAreaElement | null>(null);
 
 const canSubmit = computed(() => text.value.trim().length > 0 && status.value !== "eating");
@@ -24,7 +24,8 @@ onMounted(async () => {
 
 async function submit(): Promise<void> {
   if (!canSubmit.value) return;
-  await runEat(async () => eatText(text.value), "咔嚓，已吞下这段文字");
+  const value = text.value.trim();
+  await runEat(async () => (isPlainUrl(value) ? eatUrl(value) : eatText(text.value)), "咔嚓，已吞下这段内容");
   text.value = "";
 }
 
@@ -34,7 +35,7 @@ async function pasteAndSubmit(): Promise<void> {
     const clipboardText = (await readText()).trim();
     if (!clipboardText) throw new Error("剪贴板里没有可投喂的文字");
     text.value = clipboardText;
-    return eatText(clipboardText, "剪贴板");
+    return isPlainUrl(clipboardText) ? eatUrl(clipboardText) : eatText(clipboardText, "剪贴板");
   }, "咔嚓，已吞下剪贴板内容");
   text.value = "";
 }
@@ -46,8 +47,8 @@ async function eatPath(path: string): Promise<void> {
 async function screenshot(): Promise<void> {
   await runEat(async () => {
     const path = await captureScreenshot();
-    return eatText(`截图已保存：${path}`, `截图 ${new Date().toLocaleString()}`);
-  }, "截图路径已记下，视觉转写留给 Phase 2");
+    return eatFile(path);
+  }, "截图已转写并吞下");
 }
 
 async function runEat(action: () => Promise<{ chunkCount: number }>, doneText: string): Promise<void> {
@@ -61,12 +62,21 @@ async function runEat(action: () => Promise<{ chunkCount: number }>, doneText: s
     window.setTimeout(() => {
       void hideCurrentWindow();
       status.value = "idle";
-      feedback.value = "粘贴文字、拖入 .md/.txt，或截一张图";
+      feedback.value = "粘贴文字、URL、文件，或截一张图";
     }, 900);
   } catch (error) {
     status.value = "error";
     feedback.value = error instanceof Error ? error.message : String(error);
     window.setTimeout(() => input.value?.focus(), 50);
+  }
+}
+
+function isPlainUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return (url.protocol === "http:" || url.protocol === "https:") && !/\s/.test(value.trim());
+  } catch {
+    return false;
   }
 }
 
@@ -134,7 +144,7 @@ function onKeydown(event: KeyboardEvent): void {
             <Image :size="15" />
             截图
           </button>
-          <button class="capture-tool" type="button" :disabled="status === 'eating'" @click="feedback = '把 .md/.txt 文件拖进来就行'">
+          <button class="capture-tool" type="button" :disabled="status === 'eating'" @click="feedback = '支持 PDF、Word、表格、Markdown、图片'">
             <FileText :size="15" />
             文件
           </button>

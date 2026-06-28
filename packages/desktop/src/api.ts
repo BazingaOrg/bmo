@@ -15,6 +15,8 @@ export type EatResult = {
 
 export type SearchHit = {
   chunkRowid: number;
+  documentId: string;
+  chunkSeq: number;
   text: string;
   documentTitle: string;
   sourceType: string;
@@ -27,6 +29,35 @@ export type ProvenancePayload = {
   searched: boolean;
   totalHits: number;
   hits: SearchHit[];
+};
+
+export type DocumentDetail = {
+  id: string;
+  title: string;
+  sourceType: string;
+  sourceUrl: string | null;
+  rawPath: string | null;
+  markdown: string;
+  createdAt: number;
+  chunkCount: number;
+  chunks: { rowid: number; seq: number; text: string }[];
+};
+
+export type RuntimeSettings = {
+  similarityThreshold: number;
+  recallK: number;
+  rrfK: number;
+  chunkMaxChars: number;
+  chunkOverlap: number;
+  envPath: string;
+};
+
+export type SettingsPatch = {
+  BMO_SIMILARITY_THRESHOLD?: number;
+  BMO_RECALL_K?: number;
+  BMO_RRF_K?: number;
+  BMO_CHUNK_MAX_CHARS?: number;
+  BMO_CHUNK_OVERLAP?: number;
 };
 
 export type ChatStreamHandlers = {
@@ -81,6 +112,16 @@ export async function eatText(text: string, title?: string): Promise<EatResult> 
   return readJsonResponse<EatResult>(res);
 }
 
+export async function eatUrl(sourceUrl: string, title?: string): Promise<EatResult> {
+  const server = await getServerCredentials();
+  const res = await fetch(`${server.url}/eat`, {
+    method: "POST",
+    headers: authHeaders(server),
+    body: JSON.stringify({ sourceUrl, title }),
+  });
+  return readJsonResponse<EatResult>(res);
+}
+
 export async function eatFile(rawPath: string): Promise<EatResult> {
   const server = await getServerCredentials();
   const res = await fetch(`${server.url}/eat`, {
@@ -89,6 +130,35 @@ export async function eatFile(rawPath: string): Promise<EatResult> {
     body: JSON.stringify({ rawPath }),
   });
   return readJsonResponse<EatResult>(res);
+}
+
+export async function getDocument(id: string): Promise<DocumentDetail> {
+  const server = await getServerCredentials();
+  const res = await fetch(`${server.url}/documents/${encodeURIComponent(id)}`, {
+    headers: authHeaders(server),
+  });
+  const body = await readJsonResponse<{ document: DocumentDetail }>(res);
+  return body.document;
+}
+
+export async function getSettings(): Promise<RuntimeSettings> {
+  const server = await getServerCredentials();
+  const res = await fetch(`${server.url}/settings`, {
+    headers: authHeaders(server),
+  });
+  const body = await readJsonResponse<{ settings: RuntimeSettings }>(res);
+  return body.settings;
+}
+
+export async function updateSettings(patch: SettingsPatch): Promise<RuntimeSettings> {
+  const server = await getServerCredentials();
+  const res = await fetch(`${server.url}/settings`, {
+    method: "PATCH",
+    headers: authHeaders(server),
+    body: JSON.stringify(patch),
+  });
+  const body = await readJsonResponse<{ settings: RuntimeSettings }>(res);
+  return body.settings;
 }
 
 export async function streamChat(messages: ChatMessage[], handlers: ChatStreamHandlers): Promise<void> {
