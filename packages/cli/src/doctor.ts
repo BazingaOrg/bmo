@@ -5,6 +5,8 @@ import { openDb, defaultDbPath, embed, EMBEDDING_MODEL, EMBEDDING_DIM } from "@b
 const ok = (m: string) => console.log(`  \x1b[32m✓\x1b[0m ${m}`);
 const bad = (m: string) => console.log(`  \x1b[31m✗\x1b[0m ${m}`);
 const warn = (m: string) => console.log(`  \x1b[33m!\x1b[0m ${m}`);
+const ONE_PIXEL_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 /**
  * 环境自检：在正式投喂前一键确认 Kimi(对话)与本地 bge-m3(向量)两条链路通不通。
@@ -67,7 +69,47 @@ export async function runDoctor(): Promise<void> {
     }
   }
 
-  /* ── 3. 数据库：维度一致性 ────────────────────────────────── */
+  /* ── 3. Vision：Kimi 多模态截图转写 ─────────────────────── */
+  console.log("\n【Vision】Kimi 图片解析链路");
+  const visionBase = process.env.BMO_VISION_BASE_URL ?? process.env.BMO_CHAT_BASE_URL ?? "(未设)";
+  const visionModel = process.env.BMO_VISION_MODEL ?? "";
+  const visionKey = process.env.BMO_VISION_API_KEY ?? process.env.BMO_CHAT_API_KEY;
+  console.log(`  端点 ${visionBase} · 模型 ${visionModel || "(未设)"}`);
+  if (!visionKey) {
+    warn("未填 BMO_VISION_API_KEY 或 BMO_CHAT_API_KEY，跳过 vision 自检——截图投喂会失败");
+  } else if (!visionModel) {
+    warn("未设 BMO_VISION_MODEL，跳过 vision 自检——截图投喂会提示缺少模型");
+  } else {
+    try {
+      const client = new OpenAI({
+        baseURL: process.env.BMO_VISION_BASE_URL ?? process.env.BMO_CHAT_BASE_URL,
+        apiKey: visionKey,
+      });
+      const res = await client.chat.completions.create({
+        model: visionModel,
+        max_tokens: 32,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "这是一张 1x1 测试图。只回复：vision ok" },
+              {
+                type: "image_url",
+                image_url: { url: `data:image/png;base64,${ONE_PIXEL_PNG}` },
+              },
+            ],
+          },
+        ],
+      });
+      ok(`Vision 通了，模型 ${res.model} 回复：${res.choices[0]?.message?.content?.trim() || "(无文本)"}`);
+    } catch (e) {
+      bad(`调用失败：${(e as Error).message}`);
+      warn("常见原因：BMO_VISION_MODEL 不支持图片 / key 无效 / 端点地址不对。截图投喂依赖这个链路。");
+      fatal = true;
+    }
+  }
+
+  /* ── 4. 数据库：维度一致性 ────────────────────────────────── */
   console.log("\n【DB】SQLite + 向量表");
   const dbPath = defaultDbPath();
   if (!existsSync(dbPath)) {

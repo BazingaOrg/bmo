@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 import "./env.js"; // 必须第一个 import：在 @bmo/core 读 env 之前用 .env 覆盖 shell 变量
 import { Command } from "commander";
-import { readFileSync } from "node:fs";
-import { basename, extname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { openDb, eat, runAgent, type ChatMessage } from "@bmo/core";
+import { eatSource, isParseError, looksLikeUrl, openDb, runAgent, type ChatMessage, type ParseSource } from "@bmo/core";
 import { runDoctor } from "./doctor.js";
 
 const program = new Command();
-program.name("bmo").description("BMO — 个人知识吞噬者 (Phase 0 CLI)").version("0.1.0");
+program.name("bmo").description("BMO — 个人知识吞噬者 CLI").version("0.1.0");
 
 /* ── bmo doctor ────────────────────────────────────────── */
 program
@@ -19,8 +17,8 @@ program
 /* ── bmo eat ───────────────────────────────────────────── */
 program
   .command("eat")
-  .description("投喂内容：md/txt 文件路径，或配合 --text 直接喂纯文字")
-  .argument("[input]", "文件路径或文字内容")
+  .description("投喂内容：文件路径、URL，或配合 --text 直接喂纯文字")
+  .argument("[input]", "文件路径、URL 或文字内容")
   .option("-t, --text", "把参数当作纯文字而非文件路径")
   .option("--title <title>", "自定义标题")
   .action(async (input: string | undefined, opts: { text?: boolean; title?: string }) => {
@@ -29,26 +27,22 @@ program
       process.exit(1);
     }
     const db = openDb();
-    let markdown: string;
-    let title: string;
-
-    if (opts.text) {
-      markdown = input;
-      title = opts.title ?? input.slice(0, 20) + (input.length > 20 ? "…" : "");
-    } else {
-      const path = resolve(input);
-      const ext = extname(path).toLowerCase();
-      if (![".md", ".markdown", ".txt"].includes(ext)) {
-        console.error(`Phase 0 只吃 .md/.txt，${ext} 留给 Phase 2 的解析器`);
-        process.exit(1);
-      }
-      markdown = readFileSync(path, "utf-8");
-      title = opts.title ?? basename(path, ext);
-    }
+    const source: ParseSource = opts.text
+      ? { kind: "text", text: input, title: opts.title }
+      : looksLikeUrl(input)
+        ? { kind: "url", url: input, title: opts.title }
+        : { kind: "file", path: input, title: opts.title };
 
     process.stdout.write("咀嚼中…");
-    const result = await eat(db, { title, markdown, sourceType: "text" });
-    console.log(`\r咔嚓——已吞下《${title}》，切成 ${result.chunkCount} 块。`);
+    try {
+      const result = await eatSource(db, source);
+      console.log(`\r咔嚓——已吞下《${result.title}》，切成 ${result.chunkCount} 块。`);
+    } catch (error) {
+      console.error(`\r投喂失败：${formatError(error)}`);
+      process.exit(1);
+    } finally {
+      db.close();
+    }
   });
 
 /* ── bmo chat ──────────────────────────────────────────── */
@@ -98,3 +92,8 @@ program
   });
 
 program.parseAsync();
+
+function formatError(error: unknown): string {
+  if (isParseError(error)) return error.message;
+  return error instanceof Error ? error.message : String(error);
+}
