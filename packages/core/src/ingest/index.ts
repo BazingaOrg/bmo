@@ -87,17 +87,24 @@ function nonNegativeInt(value: string | undefined, fallback: number): number {
 
 /* ──────────────── Embedding ──────────────── */
 
-const BASE_URL = process.env.EMBEDDING_BASE_URL ?? "https://api.openai.com/v1";
-const API_KEY = process.env.EMBEDDING_API_KEY ?? "";
 export const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "text-embedding-3-small";
 
+export interface EmbedOptions {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+}
+
 /** 调任何 OpenAI 兼容端点拿向量（OpenAI / DashScope / SiliconFlow 均可） */
-export async function embed(texts: string[]): Promise<number[][]> {
+export async function embed(texts: string[], options: EmbedOptions = {}): Promise<number[][]> {
   if (texts.length === 0) return [];
-  const res = await fetch(`${BASE_URL}/embeddings`, {
+  const baseUrl = options.baseUrl ?? process.env.EMBEDDING_BASE_URL ?? "https://api.openai.com/v1";
+  const apiKey = options.apiKey ?? process.env.EMBEDDING_API_KEY ?? "";
+  const model = options.model ?? process.env.EMBEDDING_MODEL ?? EMBEDDING_MODEL;
+  const res = await fetch(`${baseUrl}/embeddings`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_KEY}` },
-    body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, input: texts }),
   });
   if (!res.ok) throw new Error(`Embedding API ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { data: { index: number; embedding: number[] }[] };

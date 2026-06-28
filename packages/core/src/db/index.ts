@@ -47,6 +47,15 @@ function migrate(db: DB): void {
       created_at      INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS digests (
+      id          TEXT PRIMARY KEY,
+      period_start INTEGER NOT NULL,
+      period_end   INTEGER NOT NULL,
+      markdown      TEXT NOT NULL,
+      stats_json    TEXT NOT NULL,
+      created_at    INTEGER NOT NULL
+    );
+
     -- 全文检索。tokenize='trigram' 对中文是务实选择：
     -- 默认 unicode61 不切分中文；trigram 按三字滑窗建索引，中英混合都能搜，
     -- 代价是查询词需 >= 3 个字符。后续可换 jieba 预分词方案。
@@ -78,4 +87,9 @@ function migrate(db: DB): void {
 export function vecToBlob(v: number[] | Float32Array): Buffer {
   const f = v instanceof Float32Array ? v : new Float32Array(v);
   return Buffer.from(f.buffer, f.byteOffset, f.byteLength);
+}
+
+export function blobToVec(blob: Buffer | Uint8Array): Float32Array {
+  const bytes = blob instanceof Buffer ? blob : Buffer.from(blob);
+  return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / Float32Array.BYTES_PER_ELEMENT);
 }
