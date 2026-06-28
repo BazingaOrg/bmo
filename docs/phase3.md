@@ -31,8 +31,8 @@
 
 | 项 | 说明 |
 |---|---|
-| **Web search API** | 选一个面向 agent 的搜索 API(Tavily / Brave Search / Serper),填 `BMO_SEARCH_API_KEY` + provider。`fetch_url` 复用 Phase 2 的 `parseUrl`,不用新依赖。 |
-| **沿用环境** | Kimi(对话/工具调用)+ 本地 bge-m3(向量)。 |
+| **Web search** | **不用第三方**:Kimi 自带内置 `$web_search`(已实测 `kimi-k2.6` 支持,服务端做搜索、按 token 计费)。`fetch_url` 复用 Phase 2 `parseUrl`,零新依赖。 |
+| **沿用环境** | Kimi(对话/工具调用/联网)+ 本地 bge-m3(向量)。 |
 | **(可选)MCP SDK** | 仅当将来做"可插拔 MCP 工具"或末节的 server 出口时才装 `@modelcontextprotocol/sdk`。 |
 
 ---
@@ -61,9 +61,11 @@
 - 把 `loop.ts` 的工具定义 + 执行改成 `ToolRegistry`:`{ schema, handler }` 按名字注册;`runAgent/runAgentStream` 遍历注册表生成 `tools`,按名字派发。
 - `search_knowledge` 迁成第一个注册项(行为不变,回归测试)。
 
-### A2. `web_search` (native)
-- 新工具 `web_search(query, top_k?)` → 调搜索 API → 返回 `[{title, url, snippet}]`。
-- description 写清调用条件:**仅当问题需要最新/库外信息时**调用(和库检索一样克制,呼应验收 #2)。
+### A2. `web_search` — 用 Kimi 内置 `$web_search`(不接第三方)
+- 已实测 `kimi-k2.6` 支持:在 `tools` 里加 `{type:"builtin_function", function:{name:"$web_search"}}`,搜索由 Moonshot 服务端做(按 token 计费,一次约数千 tokens)。
+- **特殊点**:它是「回填型」工具——模型吐出 `$web_search` 的 tool_call(arguments 里已带 search_id),客户端把这条 tool_call **原样 echo 回去**(role:"tool", content=arguments),Moonshot 再带搜索结果继续生成。
+- 所以 A1 的注册表要分两类:**client 自己算的**(search_knowledge / fetch_url)和 **builtin 回填型**($web_search)。loop 加分支:`tool_call.type === "builtin_function"` → 回填 arguments;否则走本地 handler。
+- 克制由模型自身判断(测过:说"需要联网"才触发,闲聊不触发),呼应验收 #2。
 
 ### A3. `fetch_url` (复用 Phase 2)
 - 新工具 `fetch_url(url)` → 调 `parseUrl` 抓正文转 Markdown 返回(超时/反爬错误已在 Phase 2 处理好)。
@@ -128,7 +130,7 @@
 | 风险 | 对策 |
 |---|---|
 | 联网工具被滥用(闲聊也搜) | description 写明调用条件;低相关时模型自抑(同"不盲目检索") |
-| web search API 成本/限频 | 选有免费额度的(Tavily);加结果数上限与超时 |
+| Kimi 内置搜索按 token 计费(一次数千) | 仅在模型判断需要时触发;web search 绑死 Kimi(已认可) |
 | 抓取反爬/超时 | 复用 Phase 2 `parseUrl` 已有的超时/403 兜底 |
 | 周报聚类质量不稳 | 先简单阈值聚类 + 簇数上限,逐步引入 k-means |
 | 重建 embedding 期间检索不一致 | 迁移期双表并存,切换原子化,失败可续跑 |
